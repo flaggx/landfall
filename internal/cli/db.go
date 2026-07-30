@@ -28,7 +28,7 @@ func newDBBootstrapCmd() *cobra.Command {
 		Use:   "bootstrap",
 		Short: "Install PostgreSQL and create the environment database",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
@@ -50,7 +50,7 @@ func newDBStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show PostgreSQL status for an environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}

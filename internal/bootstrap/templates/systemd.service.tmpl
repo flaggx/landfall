@@ -12,6 +12,10 @@ EnvironmentFile=-{{ .WorkDir }}/.env.production
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=20
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
 
 [Install]
 WantedBy=multi-user.target

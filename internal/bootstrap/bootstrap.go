@@ -76,7 +76,7 @@ if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y -qq git curl ca-certificates build-essential
 fi
 
-if ! command -v node >/dev/null 2>&1 || ! node --version | grep -qE 'v20\\.'; then
+if ! command -v node >/dev/null 2>&1 || ! node --version | grep -qE '^v20\.'; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y -qq nodejs
 fi
@@ -171,8 +171,10 @@ set -euo pipefail
 sudo mkdir -p /etc/caddy/vpsdeploy
 sudo mv %s /etc/caddy/vpsdeploy/%s.caddy
 CADDYFILE="/etc/caddy/Caddyfile"
-if ! grep -q "import vpsdeploy" "$CADDYFILE" 2>/dev/null; then
-  echo "import vpsdeploy/*" | sudo tee -a "$CADDYFILE" >/dev/null
+# Replace the stock :80 demo site so it does not steal HTTP traffic from
+# imported vhosts (needed for ACME HTTP-01 and reverse proxy routing).
+if grep -q 'root \* /usr/share/caddy' "$CADDYFILE" 2>/dev/null || ! grep -q 'import vpsdeploy' "$CADDYFILE" 2>/dev/null; then
+  printf '%%s\n' 'import vpsdeploy/*' | sudo tee "$CADDYFILE" >/dev/null
 fi
 sudo systemctl reload caddy || sudo systemctl restart caddy
 `, shellQuote(caddyPath), cfg.ServiceName())
@@ -188,6 +190,12 @@ mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 if [ ! -f ~/.ssh/id_ed25519 ]; then
   ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "vpsdeploy@$(hostname)"
+fi
+# Trust GitHub host keys so git clone/fetch over SSH works without prompts.
+touch ~/.ssh/known_hosts
+chmod 600 ~/.ssh/known_hosts
+if ! grep -q '^github.com ' ~/.ssh/known_hosts 2>/dev/null; then
+  ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null || true
 fi
 echo "--- Add this deploy key to GitHub (read-only) ---"
 cat ~/.ssh/id_ed25519.pub

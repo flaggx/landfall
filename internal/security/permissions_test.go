@@ -14,12 +14,18 @@ func TestBuildPermissionsScript(t *testing.T) {
 		".env.production",
 		"chmod 600",
 		"chmod 700",
+		`if [ -f "$HOME/.ssh/id_ed25519" ]; then`,
+		`if [ -f "$HOME/.ssh/id_ed25519.pub" ]; then`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("expected script to contain %q", want)
 		}
 	}
+	if strings.Contains(script, `[ -f "$HOME/.ssh/id_ed25519" ] &&`) {
+		t.Fatal("should not use && after test that can fail under set -e exit status")
+	}
 }
+
 
 func TestBuildPermissionsCheckScript(t *testing.T) {
 	script := BuildPermissionsCheckScript("/var/www/app-prod", "deploy", true)

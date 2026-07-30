@@ -28,7 +28,7 @@ func newRedisBootstrapCmd() *cobra.Command {
 		Use:   "bootstrap",
 		Short: "Install Redis and create the environment cache user",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
@@ -50,7 +50,7 @@ func newRedisStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show Redis status for an environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}

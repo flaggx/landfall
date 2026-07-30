@@ -52,6 +52,43 @@ func TestValidateProjectConfig(t *testing.T) {
 	}
 }
 
+func TestLoadWithOptionsSkipSecrets(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ProjectConfigName)
+	content := `
+[project]
+name = "app"
+repo = "git@github.com:a/b.git"
+
+[environments.prod]
+host = "1.2.3.4"
+user = "deploy"
+path = "/var/www/app"
+branch = "main"
+port = 3000
+
+[environments.prod.env]
+DATABASE_URL = "{{secret:prod_db_url}}"
+NODE_ENV = "production"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions("prod", dir, LoadOptions{ResolveSecrets: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Environment.Env["DATABASE_URL"]; got != "{{secret:prod_db_url}}" {
+		t.Fatalf("expected unresolved secret ref, got %q", got)
+	}
+
+	_, err = LoadWithOptions("prod", dir, LoadOptions{ResolveSecrets: true})
+	if err == nil {
+		t.Fatal("expected error when resolving missing secrets")
+	}
+}
+
 func TestFindProjectConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ProjectConfigName)

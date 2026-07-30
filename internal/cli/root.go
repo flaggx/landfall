@@ -59,7 +59,7 @@ func newBootstrapCmd() *cobra.Command {
 		Use:   "bootstrap",
 		Short: "One-time VPS setup for an environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
@@ -94,7 +94,7 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show deployment status for an environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
@@ -110,7 +110,7 @@ func newLogsCmd() *cobra.Command {
 		Use:   "logs",
 		Short: "Show systemd logs for an environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
@@ -124,6 +124,12 @@ func newLogsCmd() *cobra.Command {
 
 func loadConfig() (*config.ResolvedConfig, error) {
 	return config.LoadResolved(envName, projectDir)
+}
+
+// loadConfigForConnection loads project config without requiring secrets.
+// Use for harden/bootstrap/db/redis/status/logs — those run before secrets exist.
+func loadConfigForConnection() (*config.ResolvedConfig, error) {
+	return config.LoadWithOptions(envName, projectDir, config.LoadOptions{ResolveSecrets: false})
 }
 
 func runInit() error {

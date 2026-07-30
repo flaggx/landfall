@@ -33,8 +33,12 @@ fi
 
 if [ -d "$HOME/.ssh" ]; then
   chmod 700 "$HOME/.ssh"
-  [ -f "$HOME/.ssh/id_ed25519" ] && chmod 600 "$HOME/.ssh/id_ed25519"
-  [ -f "$HOME/.ssh/id_ed25519.pub" ] && chmod 644 "$HOME/.ssh/id_ed25519.pub"
+  if [ -f "$HOME/.ssh/id_ed25519" ]; then
+    chmod 600 "$HOME/.ssh/id_ed25519"
+  fi
+  if [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
+    chmod 644 "$HOME/.ssh/id_ed25519.pub"
+  fi
 fi
 `, util.ShellQuote(deployPath), util.ShellQuote(deployUser))
 }

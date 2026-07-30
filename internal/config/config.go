@@ -148,7 +148,18 @@ func LoadProjectConfig(path string) (ProjectConfig, error) {
 	return cfg, nil
 }
 
+type LoadOptions struct {
+	// ResolveSecrets replaces {{secret:...}} refs in environment env vars.
+	// Set false for connection-only commands (harden, bootstrap, db/redis setup)
+	// that run before secrets exist.
+	ResolveSecrets bool
+}
+
 func LoadResolved(envName, projectDir string) (*ResolvedConfig, error) {
+	return LoadWithOptions(envName, projectDir, LoadOptions{ResolveSecrets: true})
+}
+
+func LoadWithOptions(envName, projectDir string, opts LoadOptions) (*ResolvedConfig, error) {
 	configPath, err := FindProjectConfig(projectDir)
 	if err != nil {
 		return nil, err
@@ -182,9 +193,18 @@ func LoadResolved(envName, projectDir string) (*ResolvedConfig, error) {
 		return nil, err
 	}
 
-	resolvedEnv, err := resolveEnvironmentEnv(env, secretsCfg)
-	if err != nil {
-		return nil, err
+	resolvedEnv := env
+	if opts.ResolveSecrets {
+		resolvedEnv, err = resolveEnvironmentEnv(env, secretsCfg)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Copy env map so callers cannot mutate the parsed project config.
+		resolvedEnv.Env = make(map[string]string, len(env.Env))
+		for k, v := range env.Env {
+			resolvedEnv.Env[k] = v
+		}
 	}
 
 	return &ResolvedConfig{

@@ -149,13 +149,17 @@ func buildApp(client *ssh.Client, cfg *config.ResolvedConfig) error {
 	script := fmt.Sprintf(`
 set -euo pipefail
 cd %s
+# Install build tooling (typescript, drizzle-kit, etc.) even when the
+# production env file sets NODE_ENV=production.
+npm ci --include=dev
 export NODE_ENV=production
+# Allow Next/TypeScript builds on small VPS plans (will spill to swap if needed).
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1536}"
 if [ -f .env.production ]; then
   set -a
   . ./.env.production
   set +a
 fi
-npm ci
 npm run build
 `, shellQuote(cfg.Environment.Path))
 
@@ -196,7 +200,7 @@ func healthCheck(client *ssh.Client, cfg *config.ResolvedConfig) error {
 set -euo pipefail
 URL=%s
 for i in $(seq 1 30); do
-  BODY=$(curl -fsS "$URL" 2>/dev/null || true)
+  BODY=$(curl -fsS --max-time 5 "$URL" 2>/dev/null || true)
   if [ -n "$BODY" ] && echo "$BODY" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
     exit 0
   fi

@@ -38,7 +38,7 @@ func newSecurityHardenCmd() *cobra.Command {
 
 Run once per VPS, ideally before going to production.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
@@ -63,7 +63,7 @@ func newSecurityStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show security hardening status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
