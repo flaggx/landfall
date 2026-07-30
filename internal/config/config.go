@@ -42,6 +42,7 @@ type Environment struct {
 	Domain      string            `toml:"domain"`
 	Env         map[string]string `toml:"env"`
 	Postgres    *PostgresConfig   `toml:"postgres"`
+	Redis       *RedisConfig      `toml:"redis"`
 }
 
 type SecretsConfig struct {

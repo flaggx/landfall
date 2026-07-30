@@ -16,6 +16,7 @@ health_check = "http://127.0.0.1:3000/api/health"
 [environments.prod.env]
 NODE_ENV = "production"
 DATABASE_URL = "{{secret:prod_db_url}}"
+REDIS_URL = "{{secret:prod_redis_url}}"
 
 [environments.dev]
 host = "203.0.113.10"
@@ -29,8 +30,15 @@ health_check = "http://127.0.0.1:3001/api/health"
 [environments.dev.env]
 NODE_ENV = "development"
 DATABASE_URL = "{{secret:dev_db_url}}"
+REDIS_URL = "{{secret:dev_redis_url}}"
 
 # Optional: override default database names (defaults to my_webapp_prod / my_webapp_dev)
 # [environments.prod.postgres]
 # database = "my_webapp_prod"
+# user = "my_webapp_prod"
+
+# Optional: override default Redis settings (defaults: port 6379, DB index 0 for prod / 1 for dev)
+# [environments.prod.redis]
+# port = 6379
+# database = 0
 # user = "my_webapp_prod"

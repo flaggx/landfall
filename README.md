@@ -203,7 +203,41 @@ PostgreSQL listens on `localhost` only — it is not exposed to the internet. On
 
 See [PostgreSQL on the VPS](#postgresql-on-the-vps) for more options.
 
-#### Step 7: First deploy
+#### Step 7: Set up Redis (optional)
+
+If your app uses in-memory caching, install Redis on the VPS and create a dedicated ACL user per environment:
+
+```bash
+cd /path/to/your-webapp
+
+# Prod cache — installs Redis on first run, creates ACL user, saves secret
+vpsdeploy redis bootstrap --env prod --save-secret
+
+# Dev cache on the same VPS (reuses Redis, separate ACL user + DB index)
+vpsdeploy redis bootstrap --env dev --save-secret
+
+# Check status
+vpsdeploy redis status --env prod
+```
+
+This creates a connection string like:
+
+```
+redis://my_webapp_prod:<password>@127.0.0.1:6379/0
+```
+
+Wire it up in `vpsdeploy.toml`:
+
+```toml
+[environments.prod.env]
+REDIS_URL = "{{secret:prod_redis_url}}"
+```
+
+Redis binds to `localhost` only. Prod uses DB index `0`, dev uses `1` by default.
+
+See [Redis on the VPS](#redis-on-the-vps) for more options.
+
+#### Step 8: First deploy
 
 ```bash
 vpsdeploy deploy --env prod
@@ -302,6 +336,9 @@ vpsdeploy deploy --env prod --ref abc1234
 | `vpsdeploy db bootstrap --env prod` | Install PostgreSQL and create environment database |
 | `vpsdeploy db bootstrap --env prod --save-secret` | Bootstrap DB and save connection string to secrets |
 | `vpsdeploy db status --env prod` | Show PostgreSQL install and database status |
+| `vpsdeploy redis bootstrap --env prod` | Install Redis and create environment cache user |
+| `vpsdeploy redis bootstrap --env prod --save-secret` | Bootstrap Redis and save connection string to secrets |
+| `vpsdeploy redis status --env prod` | Show Redis install and ACL user status |
 
 **Global flags:**
 
@@ -445,6 +482,74 @@ vpsdeploy db status --env prod
 - Database credentials live in your local secrets file and `.env.production` on the VPS
 - Use separate databases for prod and dev on the same VPS
 - Do not expose port 5432 in your firewall
+
+---
+
+## Redis on the VPS
+
+`vpsdeploy redis bootstrap` installs Redis via apt (Ubuntu/Debian), creates an ACL user per environment, and gives you a connection string for caching.
+
+### Bootstrap
+
+```bash
+# First environment — installs Redis + creates ACL user
+vpsdeploy redis bootstrap --env prod --save-secret
+
+# Second environment on same VPS — separate ACL user + DB index
+vpsdeploy redis bootstrap --env dev --save-secret
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--save-secret` | Save `REDIS_URL` to local secrets (`prod_redis_url`, `dev_redis_url`, etc.) |
+| `--reset-password` | Generate a new password for an existing ACL user |
+
+### Default naming
+
+For project `my-webapp` and env `prod`:
+
+- ACL user: `my_webapp_prod`
+- DB index: `0` (prod), `1` (dev), `2` (staging)
+- Port: `6379`
+- Secret: `prod_redis_url`
+
+Override in `vpsdeploy.toml`:
+
+```toml
+[environments.prod.redis]
+port = 6379
+database = 0
+user = "my_webapp_prod"
+```
+
+### Wire up your app
+
+```toml
+[environments.prod.env]
+REDIS_URL = "{{secret:prod_redis_url}}"
+```
+
+Then verify and deploy:
+
+```bash
+vpsdeploy secrets check
+vpsdeploy deploy --env prod
+```
+
+### Check status
+
+```bash
+vpsdeploy redis status --env prod
+```
+
+### Security notes
+
+- Redis binds to `127.0.0.1` only (not exposed to the internet)
+- Each environment gets its own ACL user with a unique password
+- Use separate DB indexes for prod and dev to isolate keyspaces
+- Do not expose port 6379 in your firewall
 
 ---
 

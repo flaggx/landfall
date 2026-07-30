@@ -37,6 +37,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newSecretsCmd())
 	root.AddCommand(newDBCmd())
+	root.AddCommand(newRedisCmd())
 
 	return root
 }
@@ -168,6 +169,7 @@ func runInit() error {
 				Env: map[string]string{
 					"NODE_ENV":     "production",
 					"DATABASE_URL": "{{secret:prod_db_url}}",
+					"REDIS_URL":    "{{secret:prod_redis_url}}",
 				},
 			},
 			"dev": {
@@ -181,6 +183,7 @@ func runInit() error {
 				Env: map[string]string{
 					"NODE_ENV":     "development",
 					"DATABASE_URL": "{{secret:dev_db_url}}",
+					"REDIS_URL":    "{{secret:dev_redis_url}}",
 				},
 			},
 		},

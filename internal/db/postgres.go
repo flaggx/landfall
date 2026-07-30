@@ -3,10 +3,10 @@ package db
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/flaggx/vpsdeploymentautomation/internal/config"
 	"github.com/flaggx/vpsdeploymentautomation/internal/ssh"
+	"github.com/flaggx/vpsdeploymentautomation/internal/util"
 )
 
 type BootstrapOptions struct {
@@ -56,9 +56,9 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 	if err != nil {
 		return nil, fmt.Errorf("read bootstrap result: %w", err)
 	}
-	_, _ = client.Run(fmt.Sprintf("rm -f %s", shellQuote(resultPath)))
+	_, _ = client.Run(fmt.Sprintf("rm -f %s", util.ShellQuote(resultPath)))
 
-	vars := parseEnvFile(string(raw))
+	vars := util.ParseEnvFile(string(raw))
 	connectionString := vars["DATABASE_URL"]
 
 	result := &BootstrapResult{
@@ -213,7 +213,7 @@ sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"${DB_NAME}\" TO \"$
   fi
 } > "$RESULT"
 chmod 600 "$RESULT"
-`, shellQuote(resultPath), shellQuote(dbName), shellQuote(dbUser), shellQuote(resetFlag))
+`, util.ShellQuote(resultPath), util.ShellQuote(dbName), util.ShellQuote(dbUser), util.ShellQuote(resetFlag))
 }
 
 func printBootstrapResult(result *BootstrapResult) {
@@ -226,24 +226,4 @@ func printBootstrapResult(result *BootstrapResult) {
 		fmt.Fprintf(os.Stdout, "PostgreSQL database %q already exists (user %q)\n", result.Database, result.User)
 		fmt.Fprintln(os.Stdout, "Use --reset-password to rotate the password, or keep your existing secret.")
 	}
-}
-
-func parseEnvFile(raw string) map[string]string {
-	vars := map[string]string{}
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		vars[strings.TrimSpace(key)] = strings.TrimSpace(value)
-	}
-	return vars
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
