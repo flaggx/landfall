@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flaggx/vpsdeploymentautomation/internal/config"
+	"github.com/flaggx/vpsdeploymentautomation/internal/security"
 	"github.com/flaggx/vpsdeploymentautomation/internal/ssh"
 )
 
@@ -53,6 +54,7 @@ func Run(cfg *config.ResolvedConfig, opts Options) (*Result, error) {
 		{"env", func(c *ssh.Client) error { return writeEnvFile(c, cfg) }},
 		{"build", func(c *ssh.Client) error { return buildApp(c, cfg) }},
 		{"activate", func(c *ssh.Client) error { return activateRelease(c, cfg) }},
+		{"permissions", func(c *ssh.Client) error { return enforcePermissions(c, cfg) }},
 		{"restart", func(c *ssh.Client) error { return restartService(c, serviceName) }},
 		{"health", func(c *ssh.Client) error { return healthCheck(c, cfg) }},
 	}
@@ -135,6 +137,12 @@ func writeEnvFile(client *ssh.Client, cfg *config.ResolvedConfig) error {
 
 	envPath := cfg.Environment.Path + "/.env.production"
 	return client.UploadFile(envPath, []byte(b.String()), 0o600)
+}
+
+func enforcePermissions(client *ssh.Client, cfg *config.ResolvedConfig) error {
+	script := security.BuildPermissionsScript(cfg.Environment.Path, cfg.Environment.User)
+	_, err := client.RunScript("vpsdeploy-permissions.sh", script)
+	return err
 }
 
 func buildApp(client *ssh.Client, cfg *config.ResolvedConfig) error {

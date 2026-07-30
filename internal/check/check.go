@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flaggx/vpsdeploymentautomation/internal/config"
+	"github.com/flaggx/vpsdeploymentautomation/internal/security"
 	"github.com/flaggx/vpsdeploymentautomation/internal/ssh"
 	"github.com/flaggx/vpsdeploymentautomation/internal/util"
 )
@@ -111,6 +112,9 @@ func runRemoteChecks(client *ssh.Client, cfg *config.ResolvedConfig) ([]Result, 
 	serviceName := cfg.ServiceName()
 	deployPath := cfg.Environment.Path
 
+	expectEnvFile := len(cfg.Environment.Env) > 0
+	permissionsChecks := security.BuildPermissionsCheckScript(deployPath, cfg.Environment.User, expectEnvFile)
+
 	resultPath := fmt.Sprintf("/tmp/vpsdeploy-check-%s.env", cfg.EnvName)
 	script := fmt.Sprintf(`
 set -euo pipefail
@@ -121,6 +125,8 @@ pass() { echo "$1=PASS|$2" >> "$RESULT"; }
 fail() { echo "$1=FAIL|$2" >> "$RESULT"; }
 warn() { echo "$1=WARN|$2" >> "$RESULT"; }
 skip() { echo "$1=SKIP|$2" >> "$RESULT"; }
+
+%s
 
 # Security
 if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -223,7 +229,7 @@ else
 fi
 
 chmod 600 "$RESULT"
-`, util.ShellQuote(resultPath),
+`, util.ShellQuote(resultPath), permissionsChecks,
 		util.ShellQuote(deployPath), util.ShellQuote(deployPath),
 		serviceName, serviceName,
 		boolString(expectDB), dbName, dbName,

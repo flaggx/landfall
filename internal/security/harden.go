@@ -40,6 +40,10 @@ func Harden(cfg *config.ResolvedConfig, opts HardenOptions) error {
 		return err
 	}
 
+	if err := EnforcePermissions(cfg, client); err != nil {
+		return fmt.Errorf("secret file permissions: %w", err)
+	}
+
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Security hardening complete.")
 	printPostHardenNotes(opts)
@@ -258,6 +262,7 @@ func printPostHardenNotes(opts HardenOptions) {
 	fmt.Fprintln(os.Stdout, "  - UFW firewall (SSH, HTTP, HTTPS)")
 	fmt.Fprintln(os.Stdout, "  - fail2ban SSH protection")
 	fmt.Fprintln(os.Stdout, "  - SSH hardening via /etc/ssh/sshd_config.d/99-vpsdeploy.conf")
+	fmt.Fprintln(os.Stdout, "  - Secret file permissions (deploy dir 750, .env.production 600)")
 
 	if opts.DisableSSHPassword {
 		fmt.Fprintln(os.Stdout, "")

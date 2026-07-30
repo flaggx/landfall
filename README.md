@@ -716,6 +716,7 @@ vpsdeploy security harden --env prod
 | **UFW firewall** | Denies incoming by default; allows SSH (22), HTTP (80), HTTPS (443) |
 | **fail2ban** | Bans IPs after repeated failed SSH login attempts |
 | **SSH hardening** | Drop-in config at `/etc/ssh/sshd_config.d/99-vpsdeploy.conf` |
+| **File permissions** | Deploy dir `750`, `.env.production` `600`, `~/.ssh` `700` |
 
 **Flags:**
 
@@ -756,6 +757,7 @@ vpsdeploy deploy --env prod
 - SSH changes are applied via a reversible drop-in file
 - UFW blocks all ports except SSH, 80, and 443 — Postgres and Redis stay localhost-only and do not need firewall rules
 - Auto-updates apply **security** patches; full release upgrades are not automatic
+- Secret files on the VPS: deploy directory `750` (owner only), `.env.production` `600` — enforced by `security harden` and every `deploy`
 
 ---
 
@@ -774,6 +776,7 @@ vpsdeploy check --env prod
 | Local | Required secrets from `vpsdeploy.toml` are set |
 | Connectivity | SSH to the VPS |
 | Security | UFW active, unattended-upgrades, fail2ban, SSH hardening drop-in |
+| File permissions | Deploy path `750`, `.env.production` `600`, `~/.ssh` `700` |
 | App runtime | Node.js installed, deploy path exists, git repo cloned, systemd active |
 | PostgreSQL | Running with expected database (if `DATABASE_URL` configured) |
 | Redis | Running with expected ACL user (if `REDIS_URL` configured) |
