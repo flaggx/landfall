@@ -41,6 +41,7 @@ type Environment struct {
 	HealthCheck string            `toml:"health_check"`
 	Domain      string            `toml:"domain"`
 	Env         map[string]string `toml:"env"`
+	Postgres    *PostgresConfig   `toml:"postgres"`
 }
 
 type SecretsConfig struct {

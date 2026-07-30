@@ -36,6 +36,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newSecretsCmd())
+	root.AddCommand(newDBCmd())
 
 	return root
 }
@@ -165,7 +166,8 @@ func runInit() error {
 				Domain:      prodDomain,
 				HealthCheck: fmt.Sprintf("http://127.0.0.1:%d/api/health", prodPort),
 				Env: map[string]string{
-					"NODE_ENV": "production",
+					"NODE_ENV":     "production",
+					"DATABASE_URL": "{{secret:prod_db_url}}",
 				},
 			},
 			"dev": {
@@ -177,7 +179,8 @@ func runInit() error {
 				Domain:      devDomain,
 				HealthCheck: fmt.Sprintf("http://127.0.0.1:%d/api/health", devPort),
 				Env: map[string]string{
-					"NODE_ENV": "development",
+					"NODE_ENV":     "development",
+					"DATABASE_URL": "{{secret:dev_db_url}}",
 				},
 			},
 		},

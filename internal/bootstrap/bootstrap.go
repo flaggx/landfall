@@ -201,9 +201,10 @@ func printNextSteps(cfg *config.ResolvedConfig) {
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Next steps:")
 	fmt.Fprintln(os.Stdout, "1. Add the deploy key printed above to your GitHub repo (Settings → Deploy keys)")
-	fmt.Fprintf(os.Stdout, "2. Run: vpsdeploy deploy --env %s\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "2. Optional: vpsdeploy db bootstrap --env %s --save-secret\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "3. Run: vpsdeploy deploy --env %s\n", cfg.EnvName)
 	if cfg.Environment.Domain != "" {
-		fmt.Fprintf(os.Stdout, "3. Point DNS for %s to %s\n", cfg.Environment.Domain, cfg.Environment.Host)
+		fmt.Fprintf(os.Stdout, "4. Point DNS for %s to %s\n", cfg.Environment.Domain, cfg.Environment.Host)
 	}
 }
 

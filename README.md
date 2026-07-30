@@ -169,7 +169,41 @@ Bootstrap installs Node 20, git, creates deploy directories, sets up a systemd s
 
 > Your webapp repo → **Settings** → **Deploy keys** → **Add deploy key** (read-only, no write access needed)
 
-#### Step 6: First deploy
+#### Step 6: Set up PostgreSQL (optional)
+
+If your app uses a database, install PostgreSQL on the VPS and create a dedicated database per environment:
+
+```bash
+cd /path/to/your-webapp
+
+# Prod database — installs PostgreSQL on first run, creates DB + user, saves secret
+vpsdeploy db bootstrap --env prod --save-secret
+
+# Dev database on the same VPS (reuses PostgreSQL, creates separate DB)
+vpsdeploy db bootstrap --env dev --save-secret
+
+# Check status
+vpsdeploy db status --env prod
+```
+
+This creates a database like `my_webapp_prod` with a local-only connection string:
+
+```
+postgresql://my_webapp_prod:<password>@localhost:5432/my_webapp_prod
+```
+
+The connection string is saved to your local secrets as `prod_db_url` / `dev_db_url` when using `--save-secret`. Your app receives it as `DATABASE_URL` at deploy time via `vpsdeploy.toml`:
+
+```toml
+[environments.prod.env]
+DATABASE_URL = "{{secret:prod_db_url}}"
+```
+
+PostgreSQL listens on `localhost` only — it is not exposed to the internet. Only your app on the same VPS can connect.
+
+See [PostgreSQL on the VPS](#postgresql-on-the-vps) for more options.
+
+#### Step 7: First deploy
 
 ```bash
 vpsdeploy deploy --env prod
@@ -265,6 +299,9 @@ vpsdeploy deploy --env prod --ref abc1234
 | `vpsdeploy secrets get <name>` | Show a masked secret value |
 | `vpsdeploy secrets delete <name>` | Delete a secret |
 | `vpsdeploy secrets check` | Verify required secrets are set |
+| `vpsdeploy db bootstrap --env prod` | Install PostgreSQL and create environment database |
+| `vpsdeploy db bootstrap --env prod --save-secret` | Bootstrap DB and save connection string to secrets |
+| `vpsdeploy db status --env prod` | Show PostgreSQL install and database status |
 
 **Global flags:**
 
@@ -342,6 +379,72 @@ STRIPE_SECRET_KEY = "{{secret:stripe_secret_key}}"
 ```
 
 At deploy time, `vpsdeploy` resolves these locally and writes `.env.production` on the VPS. The secrets file itself is never uploaded or committed.
+
+---
+
+## PostgreSQL on the VPS
+
+`vpsdeploy db bootstrap` installs PostgreSQL via apt (Ubuntu/Debian), creates a dedicated database and user per environment, and gives you a connection string for your app.
+
+### Bootstrap
+
+```bash
+# First environment — installs PostgreSQL + creates database
+vpsdeploy db bootstrap --env prod --save-secret
+
+# Second environment on same VPS — creates another database
+vpsdeploy db bootstrap --env dev --save-secret
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--save-secret` | Save `DATABASE_URL` to local secrets (`prod_db_url`, `dev_db_url`, etc.) |
+| `--reset-password` | Generate a new password for an existing database user |
+
+### Default naming
+
+For project `my-webapp` and env `prod`:
+
+- Database: `my_webapp_prod`
+- User: `my_webapp_prod`
+- Secret: `prod_db_url`
+
+Override in `vpsdeploy.toml`:
+
+```toml
+[environments.prod.postgres]
+database = "my_webapp_prod"
+user = "my_webapp_prod"
+```
+
+### Wire up your app
+
+```toml
+[environments.prod.env]
+DATABASE_URL = "{{secret:prod_db_url}}"
+```
+
+Then verify and deploy:
+
+```bash
+vpsdeploy secrets check
+vpsdeploy deploy --env prod
+```
+
+### Check status
+
+```bash
+vpsdeploy db status --env prod
+```
+
+### Security notes
+
+- PostgreSQL binds to `localhost` only (default Ubuntu install)
+- Database credentials live in your local secrets file and `.env.production` on the VPS
+- Use separate databases for prod and dev on the same VPS
+- Do not expose port 5432 in your firewall
 
 ---
 

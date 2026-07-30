@@ -28,3 +28,9 @@ health_check = "http://127.0.0.1:3001/api/health"
 
 [environments.dev.env]
 NODE_ENV = "development"
+DATABASE_URL = "{{secret:dev_db_url}}"
+
+# Optional: override default database names (defaults to my_webapp_prod / my_webapp_dev)
+# [environments.prod.postgres]
+# database = "my_webapp_prod"
+# user = "my_webapp_prod"
