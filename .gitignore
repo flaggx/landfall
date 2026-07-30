@@ -1,0 +1,55 @@
+# Binaries
+/bin/
+/vpsdeploy
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+vendor/
+
+# Local env and secrets (never commit these)
+.env
+.env.*
+!.env.example
+secrets.toml
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs and temp files
+*.log
+tmp/
+temp/
+.cache/
+
+# Debug
+debug
+__debug_bin*

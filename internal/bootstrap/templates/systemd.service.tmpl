@@ -1,0 +1,17 @@
+[Unit]
+Description={{ .ServiceName }} web application
+After=network.target
+
+[Service]
+Type=simple
+User={{ .User }}
+WorkingDirectory={{ .WorkDir }}/.next/standalone
+Environment=NODE_ENV=production
+Environment=PORT={{ .Port }}
+EnvironmentFile=-{{ .WorkDir }}/.env.production
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
