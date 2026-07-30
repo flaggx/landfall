@@ -201,11 +201,12 @@ func printNextSteps(cfg *config.ResolvedConfig) {
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Next steps:")
 	fmt.Fprintln(os.Stdout, "1. Add the deploy key printed above to your GitHub repo (Settings → Deploy keys)")
-	fmt.Fprintf(os.Stdout, "2. Optional: vpsdeploy db bootstrap --env %s --save-secret\n", cfg.EnvName)
-	fmt.Fprintf(os.Stdout, "3. Optional: vpsdeploy redis bootstrap --env %s --save-secret\n", cfg.EnvName)
-	fmt.Fprintf(os.Stdout, "4. Run: vpsdeploy deploy --env %s\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "2. Optional: vpsdeploy security harden --env %s\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "3. Optional: vpsdeploy db bootstrap --env %s --save-secret\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "4. Optional: vpsdeploy redis bootstrap --env %s --save-secret\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "5. Run: vpsdeploy deploy --env %s\n", cfg.EnvName)
 	if cfg.Environment.Domain != "" {
-		fmt.Fprintf(os.Stdout, "5. Point DNS for %s to %s\n", cfg.Environment.Domain, cfg.Environment.Host)
+		fmt.Fprintf(os.Stdout, "6. Point DNS for %s to %s\n", cfg.Environment.Domain, cfg.Environment.Host)
 	}
 }
 

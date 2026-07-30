@@ -38,6 +38,8 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(newSecretsCmd())
 	root.AddCommand(newDBCmd())
 	root.AddCommand(newRedisCmd())
+	root.AddCommand(newSecurityCmd())
+	root.AddCommand(newCheckCmd())
 
 	return root
 }

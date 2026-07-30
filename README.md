@@ -41,7 +41,130 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
 
 ---
 
-## Usage
+## First-time VPS setup (Ubuntu)
+
+Complete checklist from a fresh Ubuntu 22.04/24.04 VPS to a validated production deploy.
+
+### Prerequisites
+
+- Ubuntu VPS with root SSH access
+- Domain pointed at the VPS (optional, for HTTPS via Caddy)
+- Webapp repo on GitHub with `output: 'standalone'` in Next.js config
+- Health endpoint at `/api/health` (see [templates/health-route.ts.example](templates/health-route.ts.example))
+
+### 1. Install vpsdeploy locally
+
+```bash
+git clone git@github.com:flaggx/vpsdeploymentautomation.git
+cd vpsdeploymentautomation
+make install
+vpsdeploy --help
+```
+
+### 2. Configure your webapp
+
+```bash
+cd /path/to/your-webapp
+vpsdeploy init
+vpsdeploy secrets init
+vpsdeploy secrets check   # after adding any required secrets
+```
+
+Commit `vpsdeploy.toml` to your webapp repo.
+
+### 3. Create the deploy user on the VPS
+
+SSH in as **root**:
+
+```bash
+ssh root@YOUR_VPS_IP
+
+adduser deploy
+usermod -aG sudo deploy
+echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
+chmod 440 /etc/sudoers.d/deploy
+exit
+```
+
+From your **local machine**, copy your SSH key:
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519 deploy@YOUR_VPS_IP
+ssh deploy@YOUR_VPS_IP "echo connected"
+```
+
+### 4. Harden the VPS (once per server)
+
+```bash
+cd /path/to/your-webapp
+vpsdeploy security harden --env prod
+```
+
+Enables automatic security updates, UFW firewall, fail2ban, and SSH hardening.
+
+### 5. Bootstrap the app environment
+
+```bash
+vpsdeploy bootstrap --env prod
+# add the printed deploy key to GitHub → Settings → Deploy keys
+```
+
+Repeat for dev if needed:
+
+```bash
+vpsdeploy bootstrap --env dev --caddy
+```
+
+### 6. Optional: PostgreSQL and Redis
+
+```bash
+vpsdeploy db bootstrap --env prod --save-secret
+vpsdeploy redis bootstrap --env prod --save-secret
+vpsdeploy secrets check
+```
+
+### 7. First deploy
+
+```bash
+vpsdeploy deploy --env prod
+```
+
+### 8. Validate everything
+
+```bash
+vpsdeploy check --env prod
+```
+
+Example output when everything is correct:
+
+```
+Setup check for prod
+
+CHECK                  STATUS DETAIL
+------------------------------------------------------------------------
+local secrets          PASS   2 secret(s) configured
+ssh connection         PASS   deploy@203.0.113.10
+security ufw           PASS   active
+security auto updates  PASS   enabled
+security fail2ban      PASS   active
+security ssh           PASS   hardening drop-in present
+node                   PASS   v20.x.x
+deploy path            PASS   exists
+git repo               PASS   cloned
+systemd                PASS   service active
+postgres               PASS   database my_webapp_prod exists
+redis                  PASS   ACL user my_webapp_prod (db 0)
+health endpoint        PASS   ok=true
+health: app            PASS   ok
+health: database       PASS   ok
+health: redis          PASS   ok
+
+All checks passed.
+```
+
+If any check fails, the command exits with an error and tells you what to fix.
+
+---
 
 ### First-time setup (do once)
 
@@ -60,13 +183,13 @@ const nextConfig = {
 module.exports = nextConfig;
 ```
 
-Add a health endpoint that returns HTTP 200, for example `app/api/health/route.ts`:
+Add a health endpoint that validates your app and its dependencies. Copy [templates/health-route.ts.example](templates/health-route.ts.example) to `app/api/health/route.ts` in your webapp (requires `pg` and `redis` npm packages if using those services):
 
 ```ts
-export async function GET() {
-  return Response.json({ ok: true });
-}
+// Returns: { "ok": true, "checks": { "app": "ok", "database": "ok", "redis": "ok" } }
 ```
+
+`vpsdeploy check` and `vpsdeploy deploy` expect the endpoint to return JSON with `"ok": true`.
 
 Commit and push those changes to GitHub before deploying.
 
@@ -148,6 +271,15 @@ Test the connection:
 ```bash
 ssh deploy@your-vps-ip "echo connected"
 ```
+
+Harden the VPS and enable automatic security updates (run once per VPS, from your webapp repo after `vpsdeploy init`):
+
+```bash
+cd /path/to/your-webapp
+vpsdeploy security harden --env prod
+```
+
+This installs unattended-upgrades, UFW firewall, fail2ban, and SSH hardening. See [VPS security hardening](#vps-security-hardening).
 
 #### Step 5: Bootstrap each environment
 
@@ -259,6 +391,16 @@ Deploy succeeded in 2m15s (commit a1b2c3d)
 
 If using Caddy with a domain, point your DNS A record at the VPS IP before visiting the site.
 
+#### Step 9: Validate setup
+
+Run a full audit to confirm security hardening, services, and the health endpoint:
+
+```bash
+vpsdeploy check --env prod
+```
+
+This verifies UFW, auto-updates, fail2ban, Node.js, systemd, PostgreSQL/Redis (if configured), and that `/api/health` returns `"ok": true` with dependency checks.
+
 ---
 
 ### Day-to-day use
@@ -339,6 +481,9 @@ vpsdeploy deploy --env prod --ref abc1234
 | `vpsdeploy redis bootstrap --env prod` | Install Redis and create environment cache user |
 | `vpsdeploy redis bootstrap --env prod --save-secret` | Bootstrap Redis and save connection string to secrets |
 | `vpsdeploy redis status --env prod` | Show Redis install and ACL user status |
+| `vpsdeploy security harden --env prod` | Harden Ubuntu VPS and enable auto security updates |
+| `vpsdeploy security status --env prod` | Show firewall, fail2ban, and auto-update status |
+| `vpsdeploy check --env prod` | Full setup validation (security, services, health endpoint) |
 
 **Global flags:**
 
@@ -550,6 +695,106 @@ vpsdeploy redis status --env prod
 - Each environment gets its own ACL user with a unique password
 - Use separate DB indexes for prod and dev to isolate keyspaces
 - Do not expose port 6379 in your firewall
+
+---
+
+## VPS security hardening
+
+`vpsdeploy security harden` applies Ubuntu-focused security controls on your VPS. Run **once per VPS**, ideally right after creating the deploy user and before production traffic.
+
+### Harden
+
+```bash
+vpsdeploy security harden --env prod
+```
+
+**What it configures:**
+
+| Control | What it does |
+|---------|----------------|
+| **unattended-upgrades** | Automatically installs security patches |
+| **UFW firewall** | Denies incoming by default; allows SSH (22), HTTP (80), HTTPS (443) |
+| **fail2ban** | Bans IPs after repeated failed SSH login attempts |
+| **SSH hardening** | Drop-in config at `/etc/ssh/sshd_config.d/99-vpsdeploy.conf` |
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ssh-disable-root` | `true` | Set `PermitRootLogin no` |
+| `--ssh-disable-password` | `false` | Disable password login (key-only). Only enable after confirming SSH keys work. |
+| `--auto-reboot` | `false` | Reboot automatically for kernel security updates (03:30 server time) |
+| `--ssh-port` | `22` | SSH port to allow through UFW |
+
+Example with key-only SSH and automatic reboots:
+
+```bash
+vpsdeploy security harden --env prod --ssh-disable-password --auto-reboot
+```
+
+### Check status
+
+```bash
+vpsdeploy security status --env prod
+```
+
+### Recommended order
+
+```bash
+vpsdeploy init
+# create deploy user + ssh-copy-id on VPS
+vpsdeploy security harden --env prod
+vpsdeploy bootstrap --env prod
+vpsdeploy db bootstrap --env prod --save-secret    # optional
+vpsdeploy redis bootstrap --env prod --save-secret  # optional
+vpsdeploy deploy --env prod
+```
+
+### Notes
+
+- Requires the deploy user to have passwordless `sudo`
+- SSH changes are applied via a reversible drop-in file
+- UFW blocks all ports except SSH, 80, and 443 — Postgres and Redis stay localhost-only and do not need firewall rules
+- Auto-updates apply **security** patches; full release upgrades are not automatic
+
+---
+
+## Setup validation (`vpsdeploy check`)
+
+`vpsdeploy check` runs a pass/fail audit after first-time setup or any time you want confidence the VPS is configured correctly.
+
+```bash
+vpsdeploy check --env prod
+```
+
+**What it checks:**
+
+| Category | Checks |
+|----------|--------|
+| Local | Required secrets from `vpsdeploy.toml` are set |
+| Connectivity | SSH to the VPS |
+| Security | UFW active, unattended-upgrades, fail2ban, SSH hardening drop-in |
+| App runtime | Node.js installed, deploy path exists, git repo cloned, systemd active |
+| PostgreSQL | Running with expected database (if `DATABASE_URL` configured) |
+| Redis | Running with expected ACL user (if `REDIS_URL` configured) |
+| Health endpoint | `health_check` URL returns JSON with `"ok": true` |
+| App dependencies | Parses `checks` from health JSON (`database`, `redis`, etc.) |
+
+**Health endpoint format** (see [templates/health-route.ts.example](templates/health-route.ts.example)):
+
+```json
+{
+  "ok": true,
+  "checks": {
+    "app": "ok",
+    "database": "ok",
+    "redis": "ok"
+  },
+  "timestamp": "2026-07-30T12:00:00.000Z"
+}
+```
+
+If `DATABASE_URL` or `REDIS_URL` is not set, those checks are omitted from the response. `vpsdeploy deploy` also requires `"ok": true` from the health endpoint before reporting success.
 
 ---
 

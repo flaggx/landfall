@@ -1,0 +1,63 @@
+// Example Next.js App Router health endpoint.
+// Copy to your webapp: app/api/health/route.ts
+//
+// Validates app runtime plus optional PostgreSQL and Redis connectivity.
+// vpsdeploy check and vpsdeploy deploy expect JSON with "ok": true.
+
+import { NextResponse } from "next/server";
+
+type CheckResult = Record<string, string>;
+
+async function checkDatabase(): Promise<string> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return "skip";
+
+  try {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    await client.query("SELECT 1");
+    await client.end();
+    return "ok";
+  } catch {
+    return "fail";
+  }
+}
+
+async function checkRedis(): Promise<string> {
+  const url = process.env.REDIS_URL;
+  if (!url) return "skip";
+
+  try {
+    const { createClient } = await import("redis");
+    const client = createClient({ url });
+    client.on("error", () => {});
+    await client.connect();
+    const pong = await client.ping();
+    await client.quit();
+    return pong === "PONG" ? "ok" : "fail";
+  } catch {
+    return "fail";
+  }
+}
+
+export async function GET() {
+  const checks: CheckResult = {
+    app: "ok",
+  };
+
+  const [database, redis] = await Promise.all([checkDatabase(), checkRedis()]);
+  if (database !== "skip") checks.database = database;
+  if (redis !== "skip") checks.redis = redis;
+
+  const ok = Object.values(checks).every((value) => value === "ok" || value === "skip");
+
+  return NextResponse.json(
+    {
+      ok,
+      checks,
+      timestamp: new Date().toISOString(),
+    },
+    { status: ok ? 200 : 503 },
+  );
+}

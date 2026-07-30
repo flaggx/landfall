@@ -188,12 +188,13 @@ func healthCheck(client *ssh.Client, cfg *config.ResolvedConfig) error {
 set -euo pipefail
 URL=%s
 for i in $(seq 1 30); do
-  if curl -fsS "$URL" >/dev/null; then
+  BODY=$(curl -fsS "$URL" 2>/dev/null || true)
+  if [ -n "$BODY" ] && echo "$BODY" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
     exit 0
   fi
   sleep 2
 done
-echo "health check failed for $URL" >&2
+echo "health check failed for $URL (expected JSON with ok:true)" >&2
 exit 1
 `, shellQuote(cfg.Environment.HealthCheck))
 
