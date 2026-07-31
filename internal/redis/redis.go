@@ -204,8 +204,13 @@ if [ "$USER_EXISTS" = false ]; then
   PASSWORD_ROTATED=true
 elif [ "$RESET_PASSWORD" = true ]; then
   REDIS_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 32)
-  redis-cli -p "$REDIS_PORT" ACL SETUSER "$REDIS_USER" resetpass ">$REDIS_PASS" >/dev/null
+  # Re-assert on + key/channel/command perms; resetpass alone can leave the user disabled/empty.
+  redis-cli -p "$REDIS_PORT" ACL SETUSER "$REDIS_USER" on resetpass ">$REDIS_PASS" ~* '&*' +@all >/dev/null
   PASSWORD_ROTATED=true
+fi
+
+if [ "$CREATED" = true ] || [ "$PASSWORD_ROTATED" = true ]; then
+  redis-cli -p "$REDIS_PORT" ACL SAVE >/dev/null 2>&1 || true
 fi
 
 {
