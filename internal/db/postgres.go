@@ -23,6 +23,14 @@ type BootstrapResult struct {
 	PasswordRotated  bool
 }
 
+func dbSSHClient(cfg *config.ResolvedConfig) (*ssh.Client, error) {
+	return ssh.New(ssh.Options{
+		Host:    cfg.PostgresSSHHost(),
+		User:    cfg.PostgresSSHUser(),
+		KeyPath: cfg.Global.SSHKeyPath,
+	})
+}
+
 func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapResult, error) {
 	dbName, err := cfg.PostgresDatabase()
 	if err != nil {
@@ -33,20 +41,16 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 		return nil, err
 	}
 
-	client, err := ssh.New(ssh.Options{
-		Host:    cfg.Environment.Host,
-		User:    cfg.Environment.User,
-		KeyPath: cfg.Global.SSHKeyPath,
-	})
+	client, err := dbSSHClient(cfg)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
 
-	fmt.Fprintf(os.Stdout, "Setting up PostgreSQL for %s on %s...\n", cfg.EnvName, cfg.SSHAddress())
+	fmt.Fprintf(os.Stdout, "Setting up PostgreSQL for %s on %s...\n", cfg.EnvName, cfg.PostgresSSHHost())
 
 	resultPath := fmt.Sprintf("/tmp/vpsdeploy-db-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
-	script := buildBootstrapScript(dbName, dbUser, resultPath, opts.ResetPassword)
+	script := buildBootstrapScript(cfg, dbName, dbUser, resultPath, opts.ResetPassword)
 
 	if _, err := client.RunScript("vpsdeploy-db-bootstrap.sh", script); err != nil {
 		return nil, err
@@ -112,11 +116,7 @@ func Status(cfg *config.ResolvedConfig) error {
 		return err
 	}
 
-	client, err := ssh.New(ssh.Options{
-		Host:    cfg.Environment.Host,
-		User:    cfg.Environment.User,
-		KeyPath: cfg.Global.SSHKeyPath,
-	})
+	client, err := dbSSHClient(cfg)
 	if err != nil {
 		return err
 	}
@@ -127,6 +127,9 @@ set -euo pipefail
 echo "PostgreSQL service:"
 sudo systemctl is-active postgresql || true
 echo ""
+echo "SSH target:          %s"
+echo "Connect host:        %s"
+echo "Port:                %d"
 echo "Configured database: %s"
 echo "Configured user:     %s"
 echo ""
@@ -141,16 +144,25 @@ if command -v psql >/dev/null 2>&1; then
 else
   echo "PostgreSQL is not installed."
 fi
-`, dbName, dbUser, dbName, dbUser)
+`, util.ShellQuote(cfg.PostgresSSHHost()), util.ShellQuote(cfg.PostgresConnectHost()), cfg.PostgresPort(),
+		dbName, dbUser, dbName, dbUser)
 
 	_, err = client.RunScript("vpsdeploy-db-status.sh", script)
 	return err
 }
 
-func buildBootstrapScript(dbName, dbUser, resultPath string, resetPassword bool) string {
+func buildBootstrapScript(cfg *config.ResolvedConfig, dbName, dbUser, resultPath string, resetPassword bool) string {
 	resetFlag := "false"
 	if resetPassword {
 		resetFlag = "true"
+	}
+
+	connectHost := cfg.PostgresConnectHost()
+	port := cfg.PostgresPort()
+	appHost := cfg.PostgresAppHost()
+	remote := "false"
+	if cfg.PostgresIsRemote() {
+		remote = "true"
 	}
 
 	return fmt.Sprintf(`
@@ -161,6 +173,10 @@ RESULT=%s
 DB_NAME=%s
 DB_USER=%s
 RESET_PASSWORD=%s
+CONNECT_HOST=%s
+DB_PORT=%d
+REMOTE=%s
+APP_HOST=%s
 
 CREATED=false
 PASSWORD_ROTATED=false
@@ -205,15 +221,44 @@ fi
 
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"${DB_NAME}\" TO \"${DB_USER}\";"
 
+# Allow remote app connections when postgres.host is a dedicated DB VPS.
+if [ "$REMOTE" = "true" ]; then
+  if [ -z "$APP_HOST" ]; then
+    echo "postgres.app_host (or environment host) is required when postgres.host is set" >&2
+    exit 1
+  fi
+  PG_MAJOR=$(sudo -u postgres psql -tAc "SHOW server_version_num" | head -c 2)
+  PG_CONF_DIR="/etc/postgresql/${PG_MAJOR}/main"
+  if [ ! -d "$PG_CONF_DIR" ]; then
+    PG_CONF_DIR=$(ls -d /etc/postgresql/*/main 2>/dev/null | head -1 || true)
+  fi
+  if [ -z "$PG_CONF_DIR" ] || [ ! -d "$PG_CONF_DIR" ]; then
+    echo "Could not locate PostgreSQL config directory" >&2
+    exit 1
+  fi
+  sudo sed -i "s/^#\\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF_DIR/postgresql.conf"
+  HBA="$PG_CONF_DIR/pg_hba.conf"
+  MARKER="# vpsdeploy-app-access"
+  if ! grep -qF "$MARKER" "$HBA"; then
+    echo "$MARKER" | sudo tee -a "$HBA" >/dev/null
+    echo "host    ${DB_NAME}    ${DB_USER}    ${APP_HOST}/32    scram-sha-256" | sudo tee -a "$HBA" >/dev/null
+  fi
+  if command -v ufw >/dev/null 2>&1; then
+    sudo ufw allow from "$APP_HOST" to any port "$DB_PORT" proto tcp comment "vpsdeploy-postgres" || true
+  fi
+  sudo systemctl restart postgresql
+fi
+
 {
   echo "CREATED=${CREATED}"
   echo "PASSWORD_ROTATED=${PASSWORD_ROTATED}"
   if [ -n "$DB_PASS" ]; then
-    echo "DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}"
+    echo "DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@${CONNECT_HOST}:${DB_PORT}/${DB_NAME}"
   fi
 } > "$RESULT"
 chmod 600 "$RESULT"
-`, util.ShellQuote(resultPath), util.ShellQuote(dbName), util.ShellQuote(dbUser), util.ShellQuote(resetFlag))
+`, util.ShellQuote(resultPath), util.ShellQuote(dbName), util.ShellQuote(dbUser), util.ShellQuote(resetFlag),
+		util.ShellQuote(connectHost), port, util.ShellQuote(remote), util.ShellQuote(appHost))
 }
 
 func printBootstrapResult(result *BootstrapResult) {

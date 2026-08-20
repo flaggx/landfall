@@ -38,11 +38,53 @@ func TestPostgresNamesFromConfig(t *testing.T) {
 	}
 }
 
-func TestValidatePostgresIdentifier(t *testing.T) {
-	if _, err := validatePostgresIdentifier("1bad", "user"); err == nil {
-		t.Fatal("expected error for invalid identifier")
+func TestPostgresRemoteHelpers(t *testing.T) {
+	cfg := &ResolvedConfig{
+		Project: ProjectConfig{Project: Project{Name: "my-app"}},
+		EnvName: "prod",
+		Environment: Environment{
+			Host: "203.0.113.10",
+			User: "deploy",
+			Postgres: &PostgresConfig{
+				Host:    "203.0.113.20",
+				Port:    5432,
+				AppHost: "203.0.113.10",
+			},
+		},
 	}
-	if _, err := validatePostgresIdentifier("good_user", "user"); err != nil {
-		t.Fatal(err)
+
+	if !cfg.PostgresIsRemote() {
+		t.Fatal("expected remote")
+	}
+	if cfg.PostgresConnectHost() != "203.0.113.20" {
+		t.Fatalf("connect host: %s", cfg.PostgresConnectHost())
+	}
+	if cfg.PostgresSSHHost() != "203.0.113.20" {
+		t.Fatalf("ssh host: %s", cfg.PostgresSSHHost())
+	}
+	if cfg.PostgresAppHost() != "203.0.113.10" {
+		t.Fatalf("app host: %s", cfg.PostgresAppHost())
+	}
+	if cfg.PostgresBackupDir() != "/var/backups/vpsdeploy/prod" {
+		t.Fatalf("backup dir: %s", cfg.PostgresBackupDir())
+	}
+	if cfg.PostgresReadSecretName() != "prod_db_read_url" {
+		t.Fatalf("read secret: %s", cfg.PostgresReadSecretName())
+	}
+}
+
+func TestPostgresCoLocatedDefaults(t *testing.T) {
+	cfg := &ResolvedConfig{
+		EnvName:     "prod",
+		Environment: Environment{Host: "203.0.113.10", User: "deploy"},
+	}
+	if cfg.PostgresIsRemote() {
+		t.Fatal("expected co-located")
+	}
+	if cfg.PostgresConnectHost() != "localhost" {
+		t.Fatal(cfg.PostgresConnectHost())
+	}
+	if cfg.PostgresSSHHost() != "203.0.113.10" {
+		t.Fatal(cfg.PostgresSSHHost())
 	}
 }

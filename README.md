@@ -903,4 +903,40 @@ Each deploy runs these steps remotely:
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+## Security / private config
+
+- Put real `vpsdeploy.toml` (with your IPs and domains) in your **application** repo, not in this tooling repo.
+- Secrets stay in `~/.config/vpsdeploy/secrets.toml` only.
+- See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+## Database backups
+
+```bash
+# One-shot dump on the DB host
+vpsdeploy db backup --env prod
+
+# Dump + upload to S3-compatible storage (R2 / B2 / S3)
+# Requires secrets: backup_s3_access_key, backup_s3_secret_key
+# and [environments.prod.postgres] backup_s3_bucket (+ endpoint)
+vpsdeploy db backup --env prod --upload
+
+vpsdeploy db backups --env prod
+vpsdeploy db restore --env prod --file /var/backups/vpsdeploy/prod/NAME.dump --yes
+
+# Daily timer (UTC hour, default 03:00)
+vpsdeploy db schedule --env prod
+vpsdeploy db schedule --env prod --upload --hour 3
+```
+
+## Postgres scale ladder (self-hosted “managed” feel)
+
+1. **Vertical** — resize the VPS (CPU/RAM).
+2. **Backups** — `db backup` / `db schedule` (+ off-site upload).
+3. **Dedicated DB host** — set `[environments.prod.postgres] host` + `app_host`, then `vpsdeploy db bootstrap --env prod`.
+4. **Connection pooler** — `vpsdeploy db pooler --env prod` (PgBouncer on 6432).
+5. **Read replica** — `vpsdeploy db replica bootstrap --env prod --replica-host <ip>`.
+6. **HA failover** — not automated yet (roadmap: Patroni).
+
+Co-located Postgres (default) still uses `localhost` in `DATABASE_URL` and needs no `postgres.host`.

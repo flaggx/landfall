@@ -24,6 +24,9 @@ secrets.toml
 id_rsa
 id_ed25519
 
+# Project-specific deploy config belongs in the app repo, not this tool repo
+/vpsdeploy.toml
+
 # IDE and editor
 .vscode/
 .idea/
