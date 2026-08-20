@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -15,7 +16,19 @@ import (
 )
 
 // Version is set at build time via -ldflags (see Makefile / GoReleaser).
+// When unset (e.g. `go install`), it falls back to module build info.
 var Version = "dev"
+
+func init() {
+	if Version != "dev" {
+		return
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			Version = v
+		}
+	}
+}
 
 var (
 	projectDir string

@@ -5,6 +5,13 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-20
+
+### Fixed
+
+- `landfall version` reports the module version when installed via `go install`
+  (falls back to `runtime/debug` build info when ldflags are absent)
+
 ## [0.1.0] - 2026-08-20
 
 First recommended public release. Dogfooded on a production Next.js app.
@@ -40,4 +47,5 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
+[0.1.1]: https://github.com/flaggx/landfall/releases/tag/v0.1.1
 [0.1.0]: https://github.com/flaggx/landfall/releases/tag/v0.1.0

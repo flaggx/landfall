@@ -96,7 +96,7 @@ Requires Go 1.22+ (see `go.mod`) and SSH access to an Ubuntu 22.04/24.04 VPS.
 **Recommended** (after a tagged release):
 
 ```bash
-go install github.com/flaggx/landfall/cmd/landfall@v0.1.0
+go install github.com/flaggx/landfall/cmd/landfall@v0.1.1
 ```
 
 Or download a Linux binary from the [GitHub Releases](https://github.com/flaggx/landfall/releases) page.
