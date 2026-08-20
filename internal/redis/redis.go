@@ -45,10 +45,10 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 
 	fmt.Fprintf(os.Stdout, "Setting up Redis for %s on %s...\n", cfg.EnvName, cfg.SSHAddress())
 
-	resultPath := fmt.Sprintf("/tmp/vpsdeploy-redis-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
+	resultPath := fmt.Sprintf("/tmp/landfall-redis-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
 	script := buildBootstrapScript(redisUser, redisPort, redisDB, resultPath, opts.ResetPassword)
 
-	if _, err := client.RunScript("vpsdeploy-redis-bootstrap.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-redis-bootstrap.sh", script); err != nil {
 		return nil, err
 	}
 
@@ -92,11 +92,11 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 		}
 		fmt.Fprintf(os.Stdout, "Saved secret %q\n", result.SecretName)
 	} else if result.ConnectionString != "" && (result.Created || result.PasswordRotated) {
-		fmt.Fprintf(os.Stdout, "\nSave to secrets with:\n  vpsdeploy secrets set %s --value %q\n", result.SecretName, result.ConnectionString)
+		fmt.Fprintf(os.Stdout, "\nSave to secrets with:\n  landfall secrets set %s --value %q\n", result.SecretName, result.ConnectionString)
 	}
 
 	if result.Created || result.PasswordRotated {
-		fmt.Fprintf(os.Stdout, "\nAdd to vpsdeploy.toml if not already present:\n")
+		fmt.Fprintf(os.Stdout, "\nAdd to landfall.toml if not already present:\n")
 		fmt.Fprintf(os.Stdout, "[environments.%s.env]\nREDIS_URL = \"{{secret:%s}}\"\n", cfg.EnvName, result.SecretName)
 	}
 
@@ -144,7 +144,7 @@ else
 fi
 `, redisUser, redisDB, redisPort, redisPort, redisPort, redisUser)
 
-	_, err = client.RunScript("vpsdeploy-redis-status.sh", script)
+	_, err = client.RunScript("landfall-redis-status.sh", script)
 	return err
 }
 

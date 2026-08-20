@@ -65,7 +65,7 @@ func TestPostgresRemoteHelpers(t *testing.T) {
 	if cfg.PostgresAppHost() != "203.0.113.10" {
 		t.Fatalf("app host: %s", cfg.PostgresAppHost())
 	}
-	if cfg.PostgresBackupDir() != "/var/backups/vpsdeploy/prod" {
+	if cfg.PostgresBackupDir() != "/var/backups/landfall/prod" {
 		t.Fatalf("backup dir: %s", cfg.PostgresBackupDir())
 	}
 	if cfg.PostgresReadSecretName() != "prod_db_read_url" {

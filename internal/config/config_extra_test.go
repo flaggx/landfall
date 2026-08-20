@@ -112,10 +112,34 @@ func TestFindProjectConfigWalksUp(t *testing.T) {
 	}
 }
 
-func TestFindProjectConfigMissing(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := FindProjectConfig(dir); err == nil {
-		t.Fatal("expected not found")
+func TestFindProjectConfigLegacyName(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, LegacyProjectConfigName)
+	if err := os.WriteFile(cfgPath, []byte("[project]\nname=\"x\"\nrepo=\"y\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found, err := FindProjectConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != cfgPath {
+		t.Fatalf("got %s want %s", found, cfgPath)
+	}
+}
+
+func TestGlobalConfigDirPrefersLegacyWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := filepath.Join(home, ".config", LegacyAppName)
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := GlobalConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != legacy {
+		t.Fatalf("got %s want %s", dir, legacy)
 	}
 }
 

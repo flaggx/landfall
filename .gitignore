@@ -1,5 +1,6 @@
 # Binaries
 /bin/
+/landfall
 /vpsdeploy
 *.exe
 *.exe~
@@ -25,6 +26,7 @@ id_rsa
 id_ed25519
 
 # Project-specific deploy config belongs in the app repo, not this tool repo
+/landfall.toml
 /vpsdeploy.toml
 
 # IDE and editor

@@ -32,7 +32,7 @@ func BootstrapReplica(cfg *config.ResolvedConfig, opts ReplicaOptions) error {
 	}
 
 	primaryHost := cfg.PostgresSSHHost()
-	replUser := "vpsdeploy_repl"
+	replUser := "landfall_repl"
 	port := cfg.PostgresPort()
 
 	primary, err := dbSSHClient(cfg)
@@ -43,7 +43,7 @@ func BootstrapReplica(cfg *config.ResolvedConfig, opts ReplicaOptions) error {
 
 	fmt.Fprintf(os.Stdout, "Configuring replication user on primary %s...\n", primaryHost)
 
-	resultPath := fmt.Sprintf("/tmp/vpsdeploy-repl-%s.env", cfg.EnvName)
+	resultPath := fmt.Sprintf("/tmp/landfall-repl-%s.env", cfg.EnvName)
 	primScript := fmt.Sprintf(`
 set -euo pipefail
 RESULT=%s
@@ -69,20 +69,20 @@ grep -q '^max_wal_senders' "$PG_CONF_DIR/postgresql.conf" && sudo sed -i "s/^#\\
 grep -q '^max_replication_slots' "$PG_CONF_DIR/postgresql.conf" && sudo sed -i "s/^#\\?max_replication_slots.*/max_replication_slots = 10/" "$PG_CONF_DIR/postgresql.conf" || echo "max_replication_slots = 10" | sudo tee -a "$PG_CONF_DIR/postgresql.conf" >/dev/null
 
 HBA="$PG_CONF_DIR/pg_hba.conf"
-MARKER="# vpsdeploy-replication"
+MARKER="# landfall-replication"
 if ! grep -qF "$MARKER" "$HBA"; then
   echo "$MARKER" | sudo tee -a "$HBA" >/dev/null
   echo "host    replication    ${REPL_USER}    ${REPLICA_HOST}/32    scram-sha-256" | sudo tee -a "$HBA" >/dev/null
 fi
 if command -v ufw >/dev/null 2>&1; then
-  sudo ufw allow from "$REPLICA_HOST" to any port "$DB_PORT" proto tcp comment "vpsdeploy-replication" || true
+  sudo ufw allow from "$REPLICA_HOST" to any port "$DB_PORT" proto tcp comment "landfall-replication" || true
 fi
 sudo systemctl restart postgresql
 echo "REPL_PASS=$PASS" > "$RESULT"
 chmod 600 "$RESULT"
 `, util.ShellQuote(resultPath), util.ShellQuote(replUser), util.ShellQuote(opts.ReplicaHost), port)
 
-	if _, err := primary.RunScript("vpsdeploy-db-repl-primary.sh", primScript); err != nil {
+	if _, err := primary.RunScript("landfall-db-repl-primary.sh", primScript); err != nil {
 		return err
 	}
 	raw, err := primary.ReadFile(resultPath)
@@ -142,7 +142,7 @@ else
 fi
 `, util.ShellQuote(primaryHost), util.ShellQuote(replUser), util.ShellQuote(replPass), port, util.ShellQuote(replPass))
 
-	if _, err := replica.RunScript("vpsdeploy-db-repl-standby.sh", standbyScript); err != nil {
+	if _, err := replica.RunScript("landfall-db-repl-standby.sh", standbyScript); err != nil {
 		return err
 	}
 

@@ -94,7 +94,7 @@ node --version
 df -h %s | tail -1
 `, shellQuote(cfg.Environment.Path), shellQuote(cfg.Environment.Path), shellQuote(cfg.Environment.Path))
 
-	_, err := client.RunScript("vpsdeploy-preflight.sh", script)
+	_, err := client.RunScript("landfall-preflight.sh", script)
 	return err
 }
 
@@ -122,7 +122,7 @@ git reset --hard FETCH_HEAD
 		shellQuote(ref), shellQuote(ref),
 		shellQuote(ref), shellQuote(branch), shellQuote(ref))
 
-	_, err := client.RunScript("vpsdeploy-sync.sh", script)
+	_, err := client.RunScript("landfall-sync.sh", script)
 	return err
 }
 
@@ -150,7 +150,7 @@ func formatEnvFile(env map[string]string) string {
 
 func enforcePermissions(client *ssh.Client, cfg *config.ResolvedConfig) error {
 	script := security.BuildPermissionsScript(cfg.Environment.Path, cfg.Environment.User)
-	_, err := client.RunScript("vpsdeploy-permissions.sh", script)
+	_, err := client.RunScript("landfall-permissions.sh", script)
 	return err
 }
 
@@ -172,7 +172,7 @@ fi
 npm run build
 `, shellQuote(cfg.Environment.Path))
 
-	_, err := client.RunScript("vpsdeploy-build.sh", script)
+	_, err := client.RunScript("landfall-build.sh", script)
 	return err
 }
 
@@ -190,7 +190,7 @@ echo "deployed_at=$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> .deploy-meta
 echo "env=%s" >> .deploy-meta
 `, shellQuote(cfg.Environment.Path), cfg.EnvName)
 
-	_, err := client.RunScript("vpsdeploy-activate.sh", script)
+	_, err := client.RunScript("landfall-activate.sh", script)
 	return err
 }
 
@@ -219,7 +219,7 @@ echo "health check failed for $URL (expected JSON with ok:true)" >&2
 exit 1
 `, shellQuote(cfg.Environment.HealthCheck))
 
-	_, err := client.RunScript("vpsdeploy-health.sh", script)
+	_, err := client.RunScript("landfall-health.sh", script)
 	return err
 }
 
@@ -265,7 +265,7 @@ fi
 		shellQuote(cfg.Environment.Path), shellQuote(cfg.Environment.Path),
 		shellQuote(cfg.Environment.Path), shellQuote(cfg.Environment.Path))
 
-	_, err = client.RunScript("vpsdeploy-status.sh", script)
+	_, err = client.RunScript("landfall-status.sh", script)
 	return err
 }
 

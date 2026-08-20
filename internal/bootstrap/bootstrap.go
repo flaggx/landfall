@@ -93,7 +93,7 @@ fi
 		shellQuote(cfg.Project.Project.Repo),
 		shellQuote(cfg.Environment.Path))
 
-	_, err := client.RunScript("vpsdeploy-bootstrap-base.sh", script)
+	_, err := client.RunScript("landfall-bootstrap-base.sh", script)
 	return err
 }
 
@@ -127,7 +127,7 @@ sudo systemctl enable %s
 sudo systemctl restart %s
 `, shellQuote(remotePath), cfg.ServiceName(), cfg.ServiceName(), cfg.ServiceName())
 
-	_, err = client.RunScript("vpsdeploy-bootstrap-systemd.sh", script)
+	_, err = client.RunScript("landfall-bootstrap-systemd.sh", script)
 	return err
 }
 
@@ -157,7 +157,7 @@ if ! command -v caddy >/dev/null 2>&1; then
 fi
 `
 
-	if _, err := client.RunScript("vpsdeploy-bootstrap-caddy-install.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-bootstrap-caddy-install.sh", script); err != nil {
 		return err
 	}
 
@@ -168,18 +168,18 @@ fi
 
 	applyScript := fmt.Sprintf(`
 set -euo pipefail
-sudo mkdir -p /etc/caddy/vpsdeploy
-sudo mv %s /etc/caddy/vpsdeploy/%s.caddy
+sudo mkdir -p /etc/caddy/landfall
+sudo mv %s /etc/caddy/landfall/%s.caddy
 CADDYFILE="/etc/caddy/Caddyfile"
 # Replace the stock :80 demo site so it does not steal HTTP traffic from
 # imported vhosts (needed for ACME HTTP-01 and reverse proxy routing).
-if grep -q 'root \* /usr/share/caddy' "$CADDYFILE" 2>/dev/null || ! grep -q 'import vpsdeploy' "$CADDYFILE" 2>/dev/null; then
-  printf '%%s\n' 'import vpsdeploy/*' | sudo tee "$CADDYFILE" >/dev/null
+if grep -q 'root \* /usr/share/caddy' "$CADDYFILE" 2>/dev/null || ! grep -q 'import landfall' "$CADDYFILE" 2>/dev/null; then
+  printf '%%s\n' 'import landfall/*' | sudo tee "$CADDYFILE" >/dev/null
 fi
 sudo systemctl reload caddy || sudo systemctl restart caddy
 `, shellQuote(caddyPath), cfg.ServiceName())
 
-	_, err = client.RunScript("vpsdeploy-bootstrap-caddy-apply.sh", applyScript)
+	_, err = client.RunScript("landfall-bootstrap-caddy-apply.sh", applyScript)
 	return err
 }
 
@@ -189,7 +189,7 @@ set -euo pipefail
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 if [ ! -f ~/.ssh/id_ed25519 ]; then
-  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "vpsdeploy@$(hostname)"
+  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "landfall@$(hostname)"
 fi
 # Trust GitHub host keys so git clone/fetch over SSH works without prompts.
 touch ~/.ssh/known_hosts
@@ -201,7 +201,7 @@ echo "--- Add this deploy key to GitHub (read-only) ---"
 cat ~/.ssh/id_ed25519.pub
 `
 
-	_, err := client.RunScript("vpsdeploy-bootstrap-deploykey.sh", script)
+	_, err := client.RunScript("landfall-bootstrap-deploykey.sh", script)
 	return err
 }
 
@@ -209,10 +209,10 @@ func printNextSteps(cfg *config.ResolvedConfig) {
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Next steps:")
 	fmt.Fprintln(os.Stdout, "1. Add the deploy key printed above to your GitHub repo (Settings → Deploy keys)")
-	fmt.Fprintf(os.Stdout, "2. Optional: vpsdeploy security harden --env %s\n", cfg.EnvName)
-	fmt.Fprintf(os.Stdout, "3. Optional: vpsdeploy db bootstrap --env %s --save-secret\n", cfg.EnvName)
-	fmt.Fprintf(os.Stdout, "4. Optional: vpsdeploy redis bootstrap --env %s --save-secret\n", cfg.EnvName)
-	fmt.Fprintf(os.Stdout, "5. Run: vpsdeploy deploy --env %s\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "2. Optional: landfall security harden --env %s\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "3. Optional: landfall db bootstrap --env %s --save-secret\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "4. Optional: landfall redis bootstrap --env %s --save-secret\n", cfg.EnvName)
+	fmt.Fprintf(os.Stdout, "5. Run: landfall deploy --env %s\n", cfg.EnvName)
 	if cfg.Environment.Domain != "" {
 		fmt.Fprintf(os.Stdout, "6. Point DNS for %s to %s\n", cfg.Environment.Domain, cfg.Environment.Host)
 	}

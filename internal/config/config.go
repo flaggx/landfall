@@ -11,9 +11,15 @@ import (
 )
 
 const (
-	ProjectConfigName = "vpsdeploy.toml"
-	GlobalConfigName  = "config.toml"
-	SecretsConfigName = "secrets.toml"
+	// AppName is the product / CLI name.
+	AppName = "landfall"
+	// LegacyAppName is accepted for config paths and filenames from older installs.
+	LegacyAppName = "vpsdeploy"
+
+	ProjectConfigName       = "landfall.toml"
+	LegacyProjectConfigName = "vpsdeploy.toml"
+	GlobalConfigName        = "config.toml"
+	SecretsConfigName       = "secrets.toml"
 )
 
 var secretRefPattern = regexp.MustCompile(`^\{\{secret:([a-zA-Z0-9_]+)\}\}$`)
@@ -58,12 +64,22 @@ type ResolvedConfig struct {
 	EnvName     string
 }
 
+// GlobalConfigDir returns ~/.config/landfall, or the legacy ~/.config/vpsdeploy
+// directory when that already exists and landfall does not (existing installs).
 func GlobalConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "vpsdeploy"), nil
+	modern := filepath.Join(home, ".config", AppName)
+	legacy := filepath.Join(home, ".config", LegacyAppName)
+	if _, err := os.Stat(modern); err == nil {
+		return modern, nil
+	}
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, nil
+	}
+	return modern, nil
 }
 
 func LoadGlobalConfig() (GlobalConfig, error) {
@@ -125,9 +141,11 @@ func FindProjectConfig(startDir string) (string, error) {
 	}
 
 	for {
-		candidate := filepath.Join(dir, ProjectConfigName)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
+		for _, name := range []string{ProjectConfigName, LegacyProjectConfigName} {
+			candidate := filepath.Join(dir, name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
 		}
 
 		parent := filepath.Dir(dir)
@@ -137,7 +155,7 @@ func FindProjectConfig(startDir string) (string, error) {
 		dir = parent
 	}
 
-	return "", fmt.Errorf("%s not found (searched from %s)", ProjectConfigName, startDir)
+	return "", fmt.Errorf("%s (or %s) not found (searched from %s)", ProjectConfigName, LegacyProjectConfigName, startDir)
 }
 
 func LoadProjectConfig(path string) (ProjectConfig, error) {
@@ -145,13 +163,13 @@ func LoadProjectConfig(path string) (ProjectConfig, error) {
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse project config: %w", err)
 	}
+	if err := validateProjectConfig(cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
 type LoadOptions struct {
-	// ResolveSecrets replaces {{secret:...}} refs in environment env vars.
-	// Set false for connection-only commands (harden, bootstrap, db/redis setup)
-	// that run before secrets exist.
 	ResolveSecrets bool
 }
 
@@ -160,76 +178,65 @@ func LoadResolved(envName, projectDir string) (*ResolvedConfig, error) {
 }
 
 func LoadWithOptions(envName, projectDir string, opts LoadOptions) (*ResolvedConfig, error) {
+	global, err := LoadGlobalConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	configPath, err := FindProjectConfig(projectDir)
 	if err != nil {
 		return nil, err
 	}
 
-	projectCfg, err := LoadProjectConfig(configPath)
+	project, err := LoadProjectConfig(configPath)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := validateProjectConfig(projectCfg); err != nil {
-		return nil, err
-	}
-
-	env, ok := projectCfg.Environments[envName]
+	env, ok := project.Environments[envName]
 	if !ok {
 		return nil, fmt.Errorf("environment %q not found in %s", envName, configPath)
 	}
-
 	if err := validateEnvironment(envName, env); err != nil {
 		return nil, err
 	}
 
-	globalCfg, err := LoadGlobalConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	secretsCfg, err := LoadSecrets()
-	if err != nil {
-		return nil, err
-	}
-
-	resolvedEnv := env
+	secrets := SecretsConfig{Secrets: map[string]string{}}
 	if opts.ResolveSecrets {
-		resolvedEnv, err = resolveEnvironmentEnv(env, secretsCfg)
+		secrets, err = LoadSecrets()
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		// Copy env map so callers cannot mutate the parsed project config.
-		resolvedEnv.Env = make(map[string]string, len(env.Env))
-		for k, v := range env.Env {
-			resolvedEnv.Env[k] = v
+		env, err = resolveEnvironmentEnv(env, secrets)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	return &ResolvedConfig{
-		Global:      globalCfg,
-		Project:     projectCfg,
-		Secrets:     secretsCfg,
+		Global:      global,
+		Project:     project,
+		Secrets:     secrets,
 		ProjectPath: filepath.Dir(configPath),
-		Environment: resolvedEnv,
+		Environment: env,
 		EnvName:     envName,
 	}, nil
 }
 
 func resolveEnvironmentEnv(env Environment, secrets SecretsConfig) (Environment, error) {
-	resolved := env
-	resolved.Env = make(map[string]string, len(env.Env))
-
-	for key, value := range env.Env {
-		resolvedValue, err := resolveSecretRef(value, secrets)
-		if err != nil {
-			return Environment{}, fmt.Errorf("env %s: %w", key, err)
-		}
-		resolved.Env[key] = resolvedValue
+	if env.Env == nil {
+		return env, nil
 	}
-
-	return resolved, nil
+	resolved := make(map[string]string, len(env.Env))
+	for key, value := range env.Env {
+		out, err := resolveSecretRef(value, secrets)
+		if err != nil {
+			return env, err
+		}
+		resolved[key] = out
+	}
+	env.Env = resolved
+	return env, nil
 }
 
 func resolveSecretRef(value string, secrets SecretsConfig) (string, error) {
@@ -237,14 +244,12 @@ func resolveSecretRef(value string, secrets SecretsConfig) (string, error) {
 	if matches == nil {
 		return value, nil
 	}
-
-	secretKey := matches[1]
-	secretValue, ok := secrets.Secrets[secretKey]
-	if !ok {
-		return "", fmt.Errorf("secret %q not found in %s", secretKey, SecretsConfigName)
+	name := matches[1]
+	secret, ok := secrets.Secrets[name]
+	if !ok || secret == "" {
+		return "", fmt.Errorf("secret %q is not set (run: landfall secrets set %s)", name, name)
 	}
-
-	return secretValue, nil
+	return secret, nil
 }
 
 func validateProjectConfig(cfg ProjectConfig) error {
@@ -301,9 +306,7 @@ func WriteProjectConfig(path string, cfg ProjectConfig) error {
 		return err
 	}
 	defer f.Close()
-
-	enc := toml.NewEncoder(f)
-	return enc.Encode(cfg)
+	return toml.NewEncoder(f).Encode(cfg)
 }
 
 func EnsureGlobalConfigDir() (string, error) {

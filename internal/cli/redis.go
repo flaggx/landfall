@@ -39,7 +39,7 @@ func newRedisBootstrapCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&resetRedisPassword, "reset-password", false, "Generate a new Redis password")
 	cmd.Flags().BoolVar(&saveRedisSecret, "save-secret", false, "Save REDIS_URL to local secrets automatically")
 	return cmd
@@ -57,6 +57,6 @@ func newRedisStatusCmd() *cobra.Command {
 			return redis.Status(cfg)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	return cmd
 }

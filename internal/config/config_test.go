@@ -68,7 +68,7 @@ branch = "main"
 port = 3000
 
 [environments.prod.env]
-DATABASE_URL = "{{secret:definitely_missing_vpsdeploy_test_secret}}"
+DATABASE_URL = "{{secret:definitely_missing_landfall_test_secret}}"
 NODE_ENV = "production"
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
@@ -79,7 +79,7 @@ NODE_ENV = "production"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Environment.Env["DATABASE_URL"]; got != "{{secret:definitely_missing_vpsdeploy_test_secret}}" {
+	if got := cfg.Environment.Env["DATABASE_URL"]; got != "{{secret:definitely_missing_landfall_test_secret}}" {
 		t.Fatalf("expected unresolved secret ref, got %q", got)
 	}
 

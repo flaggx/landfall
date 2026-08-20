@@ -31,6 +31,6 @@ Use after first-time setup or any time you want a pass/fail audit.`,
 			return check.PrintSummary(summary, cfg.EnvName)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	return cmd
 }

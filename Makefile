@@ -1,13 +1,13 @@
 .PHONY: build install test vet fmt clean check help
 
-BINARY := vpsdeploy
-CMD := ./cmd/vpsdeploy
+BINARY := landfall
+CMD := ./cmd/landfall
 BUILD_DIR := bin
 INSTALL_DIR ?= $(HOME)/bin
 
 help:
 	@echo "Available targets:"
-	@echo "  build    - Build the vpsdeploy binary to $(BUILD_DIR)/"
+	@echo "  build    - Build the landfall binary to $(BUILD_DIR)/"
 	@echo "  install  - Build and copy to $(INSTALL_DIR)/"
 	@echo "  test     - Run all unit tests"
 	@echo "  vet      - Run go vet"

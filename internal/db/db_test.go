@@ -78,14 +78,14 @@ func TestBuildBootstrapScriptRemote(t *testing.T) {
 
 func TestBuildScheduleScript(t *testing.T) {
 	cfg := testCfg(t, false)
-	script := buildScheduleScript(cfg, "vpsdeploy-db-backup-prod", "/var/backups/vpsdeploy/prod", "my_webapp_prod", 7, 3, false)
+	script := buildScheduleScript(cfg, "landfall-db-backup-prod", "/var/backups/landfall/prod", "my_webapp_prod", 7, 3, false)
 	for _, needle := range []string{
 		"pg_dump -Fc",
 		"OnCalendar=",
 		"${UNIT}.timer",
 		"RETAIN_DAYS=7",
 		":00:00",
-		"UNIT='vpsdeploy-db-backup-prod'",
+		"UNIT='landfall-db-backup-prod'",
 	} {
 		if !strings.Contains(script, needle) {
 			t.Fatalf("missing %q", needle)
@@ -114,7 +114,7 @@ func TestBootstrapReplicaRequiresHost(t *testing.T) {
 func TestS3SettingsRequiresBucketAndSecrets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cfgDir := filepath.Join(home, ".config", "vpsdeploy")
+	cfgDir := filepath.Join(home, ".config", "landfall")
 	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ backup_s3_secret_key = "sk"
 	if endpoint != "https://s3.amazonaws.com" || bucket != "backups" || region != "auto" {
 		t.Fatalf("defaults: %s %s %s", endpoint, bucket, region)
 	}
-	if prefix != "vpsdeploy/my-webapp/prod" {
+	if prefix != "landfall/my-webapp/prod" {
 		t.Fatalf("prefix: %s", prefix)
 	}
 	if ak != "ak" || sk != "sk" {

@@ -52,7 +52,7 @@ func newDBBootstrapCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&resetDBPassword, "reset-password", false, "Generate a new database password")
 	cmd.Flags().BoolVar(&saveDBSecret, "save-secret", false, "Save DATABASE_URL to local secrets automatically")
 	return cmd
@@ -70,7 +70,7 @@ func newDBStatusCmd() *cobra.Command {
 			return db.Status(cfg)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	return cmd
 }
 
@@ -86,7 +86,7 @@ func newDBBackupCmd() *cobra.Command {
 			return db.Backup(cfg, db.BackupOptions{Upload: backupUpload})
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&backupUpload, "upload", false, "Upload dump to configured S3-compatible bucket")
 	return cmd
 }
@@ -103,7 +103,7 @@ func newDBBackupsCmd() *cobra.Command {
 			return db.ListBackups(cfg)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	return cmd
 }
 
@@ -119,7 +119,7 @@ func newDBRestoreCmd() *cobra.Command {
 			return db.Restore(cfg, restoreFile, restoreYes)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().StringVar(&restoreFile, "file", "", "Absolute path to .dump on the DB host")
 	cmd.Flags().BoolVar(&restoreYes, "yes", false, "Confirm destructive restore")
 	return cmd
@@ -140,7 +140,7 @@ func newDBScheduleCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&scheduleUpload, "upload", false, "Also upload each scheduled dump to S3-compatible storage")
 	cmd.Flags().IntVar(&scheduleHour, "hour", 3, "UTC hour for daily backup (0-23)")
 	return cmd
@@ -165,7 +165,7 @@ func newDBReplicaCmd() *cobra.Command {
 			})
 		},
 	}
-	boot.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	boot.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	boot.Flags().StringVar(&replicaHost, "replica-host", "", "IP/hostname of the standby VPS")
 	boot.Flags().BoolVar(&saveDBSecret, "save-secret", false, "Remind to save DATABASE_READ_URL (password not auto-copied)")
 	cmd.AddCommand(boot)
@@ -184,7 +184,7 @@ func newDBPoolerCmd() *cobra.Command {
 			return db.BootstrapPooler(cfg, db.PoolerOptions{ListenPort: poolerPort})
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().IntVar(&poolerPort, "port", 6432, "PgBouncer listen port")
 	return cmd
 }

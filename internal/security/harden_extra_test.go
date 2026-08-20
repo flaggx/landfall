@@ -18,7 +18,7 @@ func TestBuildHardenScriptDefaults(t *testing.T) {
 		"fail2ban",
 		"PermitRootLogin no",
 		"PasswordAuthentication yes",
-		"99-vpsdeploy.conf",
+		"99-landfall.conf",
 	} {
 		if !strings.Contains(script, needle) {
 			t.Fatalf("missing %q", needle)

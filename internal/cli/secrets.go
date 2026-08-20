@@ -16,7 +16,7 @@ func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Manage local deployment secrets",
-		Long:  "Secrets are stored locally at ~/.config/vpsdeploy/secrets.toml and injected at deploy time.",
+		Long:  "Secrets are stored locally at ~/.config/landfall/secrets.toml and injected at deploy time.",
 	}
 
 	cmd.AddCommand(newSecretsInitCmd())
@@ -39,7 +39,7 @@ func newSecretsInitCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(os.Stdout, "Secrets file ready at %s\n", path)
-			fmt.Fprintln(os.Stdout, "Add secrets with: vpsdeploy secrets set <name>")
+			fmt.Fprintln(os.Stdout, "Add secrets with: landfall secrets set <name>")
 			return nil
 		},
 	}
@@ -169,7 +169,7 @@ func newSecretsDeleteCmd() *cobra.Command {
 func newSecretsCheckCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "check",
-		Short: "Verify secrets required by vpsdeploy.toml are set",
+		Short: "Verify secrets required by landfall.toml are set",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			required, missing, err := config.CheckSecretsForProject(projectDir)
 			if err != nil {
@@ -177,7 +177,7 @@ func newSecretsCheckCmd() *cobra.Command {
 			}
 
 			if len(required) == 0 {
-				fmt.Fprintln(os.Stdout, "No secret references found in vpsdeploy.toml")
+				fmt.Fprintln(os.Stdout, "No secret references found in landfall.toml")
 				return nil
 			}
 
@@ -197,7 +197,7 @@ func newSecretsCheckCmd() *cobra.Command {
 				fmt.Fprintln(os.Stdout, "")
 				fmt.Fprintln(os.Stdout, "Set missing secrets with:")
 				for _, key := range missing {
-					fmt.Fprintf(os.Stdout, "  vpsdeploy secrets set %s\n", key)
+					fmt.Fprintf(os.Stdout, "  landfall secrets set %s\n", key)
 				}
 				return fmt.Errorf("%d required secret(s) missing", len(missing))
 			}

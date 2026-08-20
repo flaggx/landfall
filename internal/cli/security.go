@@ -50,7 +50,7 @@ Run once per VPS, ideally before going to production.`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&securityDisableRootSSH, "ssh-disable-root", true, "Disable SSH root login")
 	cmd.Flags().BoolVar(&securityDisableSSHPassword, "ssh-disable-password", false, "Disable SSH password login (key-only)")
 	cmd.Flags().BoolVar(&securityAutoReboot, "auto-reboot", false, "Automatically reboot for kernel security updates")
@@ -70,6 +70,6 @@ func newSecurityStatusCmd() *cobra.Command {
 			return security.Status(cfg)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	return cmd
 }

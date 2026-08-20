@@ -1,8 +1,8 @@
-# Contributing to vpsdeploy
+# Contributing to Landfall
 
 Thanks for helping make self-hosted deploys easier for everyone.
 
-This project is **MIT-licensed open source**. You do not need to ask permission to open an issue or PR. Small docs fixes are as welcome as features.
+This project is **MIT-licensed open source** (CLI: `landfall`). You do not need to ask permission to open an issue or PR. Small docs fixes are as welcome as features.
 
 ## Ways to contribute
 
@@ -22,14 +22,15 @@ AI-assisted contributions are welcome. Please run the checks below and read your
 git clone https://github.com/flaggx/vpsdeploymentautomation.git
 cd vpsdeploymentautomation
 make build
-./bin/vpsdeploy --help
+./bin/landfall --help
 ```
 
 ## Common tasks
 
 ```bash
-make build    # bin/vpsdeploy
-make install  # ~/bin/vpsdeploy
+make build    # bin/landfall
+make install  # ~/bin/landfall
+make check    # fmt + vet + race tests (required before PR)
 make test
 make vet
 make fmt
@@ -39,7 +40,7 @@ make clean
 ## Project layout
 
 ```
-cmd/vpsdeploy/       CLI entrypoint
+cmd/landfall/       CLI entrypoint
 internal/cli/        Cobra commands
 internal/config/     TOML + secrets
 internal/deploy/     Deploy pipeline
@@ -83,7 +84,7 @@ That runs `gofmt` verification, `go vet`, and `go test -race ./...`. CI runs the
 
 ## Secrets & privacy
 
-- Never commit `vpsdeploy.toml` with real IPs into **this** repo — only example hosts like `203.0.113.10`
+- Never commit `landfall.toml` with real IPs into **this** repo — only example hosts like `203.0.113.10`
 - Never commit `secrets.toml`, `.env*`, or keys
 - Never log secret values in tests or CLI output (mask by default)
 - Prefer `0600` permissions for secrets files

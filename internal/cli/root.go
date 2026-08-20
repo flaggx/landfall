@@ -24,11 +24,16 @@ var (
 
 func NewRoot() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "vpsdeploy",
-		Short: "Deploy Git repos to a VPS",
+		Use:   "landfall",
+		Short: "Make landfall on your VPS — deploy Git apps without big-cloud lock-in",
+		Long: `Landfall deploys Git apps to your own Ubuntu VPS: build on the server, systemd,
+secrets, optional Postgres/Redis/Caddy, backups, and a path to scale out.
+
+Config: landfall.toml (or legacy vpsdeploy.toml) in your app repo.
+Secrets: ~/.config/landfall/ (or legacy ~/.config/vpsdeploy/).`,
 	}
 
-	root.PersistentFlags().StringVar(&projectDir, "project-dir", ".", "Directory containing vpsdeploy.toml")
+	root.PersistentFlags().StringVar(&projectDir, "project-dir", ".", "Directory containing landfall.toml (or vpsdeploy.toml)")
 
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newBootstrapCmd())
@@ -47,7 +52,7 @@ func NewRoot() *cobra.Command {
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Create a vpsdeploy.toml in the current project",
+		Short: "Create a landfall.toml in the current project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInit()
 		},
@@ -66,7 +71,7 @@ func newBootstrapCmd() *cobra.Command {
 			return bootstrap.Run(cfg, withCaddy)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&withCaddy, "caddy", false, "Install and configure Caddy reverse proxy")
 	return cmd
 }
@@ -84,7 +89,7 @@ func newDeployCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().StringVar(&deployRef, "ref", "", "Git ref to deploy (branch, tag, or commit). Defaults to configured branch.")
 	return cmd
 }
@@ -101,7 +106,7 @@ func newStatusCmd() *cobra.Command {
 			return deploy.Status(cfg)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	return cmd
 }
 
@@ -117,7 +122,7 @@ func newLogsCmd() *cobra.Command {
 			return deploy.Logs(cfg, followLogs)
 		},
 	}
-	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from vpsdeploy.toml")
+	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Follow log output")
 	return cmd
 }
@@ -208,7 +213,7 @@ func runInit() error {
 
 	fmt.Fprintf(os.Stdout, "Created %s\n", target)
 	fmt.Fprintf(os.Stdout, "Global config directory: %s\n", globalDir)
-	fmt.Fprintln(os.Stdout, "Optional: run `vpsdeploy secrets init` to set up local secrets")
+	fmt.Fprintln(os.Stdout, "Optional: run `landfall secrets init` to set up local secrets")
 	return nil
 }
 

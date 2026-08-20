@@ -1,5 +1,5 @@
-# vpsdeploy.toml example — copy into your webapp repo
-# Never commit real IPs into the vpsdeploy tooling repository.
+# landfall.toml example — copy into your webapp repo
+# Never commit real IPs into the landfall tooling repository.
 
 [project]
 name = "my-webapp"
@@ -31,11 +31,11 @@ REDIS_URL = "{{secret:prod_redis_url}}"
 # host = "203.0.113.20"
 # port = 5432
 # app_host = "203.0.113.10"
-# backup_dir = "/var/backups/vpsdeploy/prod"
+# backup_dir = "/var/backups/landfall/prod"
 # backup_retain = 7
 # backup_s3_endpoint = "https://<account>.r2.cloudflarestorage.com"
 # backup_s3_bucket = "my-backups"
-# backup_s3_prefix = "vpsdeploy/my-webapp/prod"
+# backup_s3_prefix = "landfall/my-webapp/prod"
 # backup_s3_region = "auto"
 
 [environments.dev]

@@ -49,10 +49,10 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 
 	fmt.Fprintf(os.Stdout, "Setting up PostgreSQL for %s on %s...\n", cfg.EnvName, cfg.PostgresSSHHost())
 
-	resultPath := fmt.Sprintf("/tmp/vpsdeploy-db-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
+	resultPath := fmt.Sprintf("/tmp/landfall-db-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
 	script := buildBootstrapScript(cfg, dbName, dbUser, resultPath, opts.ResetPassword)
 
-	if _, err := client.RunScript("vpsdeploy-db-bootstrap.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-db-bootstrap.sh", script); err != nil {
 		return nil, err
 	}
 
@@ -95,11 +95,11 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 		}
 		fmt.Fprintf(os.Stdout, "Saved secret %q\n", result.SecretName)
 	} else if result.ConnectionString != "" && (result.Created || result.PasswordRotated) {
-		fmt.Fprintf(os.Stdout, "\nSave to secrets with:\n  vpsdeploy secrets set %s --value %q\n", result.SecretName, result.ConnectionString)
+		fmt.Fprintf(os.Stdout, "\nSave to secrets with:\n  landfall secrets set %s --value %q\n", result.SecretName, result.ConnectionString)
 	}
 
 	if result.Created || result.PasswordRotated {
-		fmt.Fprintf(os.Stdout, "\nAdd to vpsdeploy.toml if not already present:\n")
+		fmt.Fprintf(os.Stdout, "\nAdd to landfall.toml if not already present:\n")
 		fmt.Fprintf(os.Stdout, "[environments.%s.env]\nDATABASE_URL = \"{{secret:%s}}\"\n", cfg.EnvName, result.SecretName)
 	}
 
@@ -147,7 +147,7 @@ fi
 `, util.ShellQuote(cfg.PostgresSSHHost()), util.ShellQuote(cfg.PostgresConnectHost()), cfg.PostgresPort(),
 		dbName, dbUser, dbName, dbUser)
 
-	_, err = client.RunScript("vpsdeploy-db-status.sh", script)
+	_, err = client.RunScript("landfall-db-status.sh", script)
 	return err
 }
 
@@ -238,13 +238,13 @@ if [ "$REMOTE" = "true" ]; then
   fi
   sudo sed -i "s/^#\\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF_DIR/postgresql.conf"
   HBA="$PG_CONF_DIR/pg_hba.conf"
-  MARKER="# vpsdeploy-app-access"
+  MARKER="# landfall-app-access"
   if ! grep -qF "$MARKER" "$HBA"; then
     echo "$MARKER" | sudo tee -a "$HBA" >/dev/null
     echo "host    ${DB_NAME}    ${DB_USER}    ${APP_HOST}/32    scram-sha-256" | sudo tee -a "$HBA" >/dev/null
   fi
   if command -v ufw >/dev/null 2>&1; then
-    sudo ufw allow from "$APP_HOST" to any port "$DB_PORT" proto tcp comment "vpsdeploy-postgres" || true
+    sudo ufw allow from "$APP_HOST" to any port "$DB_PORT" proto tcp comment "landfall-postgres" || true
   fi
   sudo systemctl restart postgresql
 fi

@@ -109,7 +109,7 @@ func (c *ResolvedConfig) PostgresBackupDir() string {
 	if c.Environment.Postgres != nil && strings.TrimSpace(c.Environment.Postgres.BackupDir) != "" {
 		return strings.TrimSpace(c.Environment.Postgres.BackupDir)
 	}
-	return fmt.Sprintf("/var/backups/vpsdeploy/%s", c.EnvName)
+	return fmt.Sprintf("/var/backups/landfall/%s", c.EnvName)
 }
 
 func (c *ResolvedConfig) PostgresBackupRetainDays() int {

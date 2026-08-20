@@ -72,7 +72,7 @@ if [ ! -f /etc/pgbouncer/userlist.txt ]; then
 fi
 
 if [ -n "$APP_HOST" ] && command -v ufw >/dev/null 2>&1; then
-  sudo ufw allow from "$APP_HOST" to any port "$LISTEN_PORT" proto tcp comment "vpsdeploy-pgbouncer" || true
+  sudo ufw allow from "$APP_HOST" to any port "$LISTEN_PORT" proto tcp comment "landfall-pgbouncer" || true
 fi
 
 sudo systemctl enable pgbouncer
@@ -85,6 +85,6 @@ echo "Point DATABASE_URL at host=${CONNECT_HOST} port=${LISTEN_PORT}"
 `, util.ShellQuote(dbName), util.ShellQuote(dbUser), listenPort,
 		util.ShellQuote(cfg.PostgresAppHost()), util.ShellQuote(cfg.PostgresConnectHost()))
 
-	_, err = client.RunScript("vpsdeploy-db-pooler.sh", script)
+	_, err = client.RunScript("landfall-db-pooler.sh", script)
 	return err
 }

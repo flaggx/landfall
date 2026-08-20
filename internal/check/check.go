@@ -115,7 +115,7 @@ func runRemoteChecks(client *ssh.Client, cfg *config.ResolvedConfig) ([]Result, 
 	expectEnvFile := len(cfg.Environment.Env) > 0
 	permissionsChecks := security.BuildPermissionsCheckScript(deployPath, cfg.Environment.User, expectEnvFile)
 
-	resultPath := fmt.Sprintf("/tmp/vpsdeploy-check-%s.env", cfg.EnvName)
+	resultPath := fmt.Sprintf("/tmp/landfall-check-%s.env", cfg.EnvName)
 	script := fmt.Sprintf(`
 set -euo pipefail
 RESULT=%s
@@ -132,54 +132,54 @@ skip() { echo "$1=SKIP|$2" >> "$RESULT"; }
 if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
   pass security_ufw "active"
 else
-  fail security_ufw "not active (run: vpsdeploy security harden)"
+  fail security_ufw "not active (run: landfall security harden)"
 fi
 
 if dpkg -s unattended-upgrades >/dev/null 2>&1 && systemctl is-active unattended-upgrades >/dev/null 2>&1; then
   pass security_auto_updates "enabled"
 else
-  fail security_auto_updates "not configured (run: vpsdeploy security harden)"
+  fail security_auto_updates "not configured (run: landfall security harden)"
 fi
 
 if command -v fail2ban-client >/dev/null 2>&1 && sudo systemctl is-active fail2ban >/dev/null 2>&1; then
   pass security_fail2ban "active"
 else
-  fail security_fail2ban "not active (run: vpsdeploy security harden)"
+  fail security_fail2ban "not active (run: landfall security harden)"
 fi
 
-if [ -f /etc/ssh/sshd_config.d/99-vpsdeploy.conf ]; then
+if [ -f /etc/ssh/sshd_config.d/99-landfall.conf ] || [ -f /etc/ssh/sshd_config.d/99-vpsdeploy.conf ]; then
   pass security_ssh "hardening drop-in present"
 else
-  warn security_ssh "drop-in missing (run: vpsdeploy security harden)"
+  warn security_ssh "drop-in missing (run: landfall security harden)"
 fi
 
 # Bootstrap / runtime
 if command -v node >/dev/null 2>&1; then
   pass node "$(node --version)"
 else
-  fail node "not installed (run: vpsdeploy bootstrap)"
+  fail node "not installed (run: landfall bootstrap)"
 fi
 
 if [ -d %s ]; then
   pass deploy_path "exists"
 else
-  fail deploy_path "missing (run: vpsdeploy bootstrap)"
+  fail deploy_path "missing (run: landfall bootstrap)"
 fi
 
 if [ -d %s/.git ]; then
   pass git_repo "cloned"
 else
-  fail git_repo "not cloned (run: vpsdeploy bootstrap or deploy)"
+  fail git_repo "not cloned (run: landfall bootstrap or deploy)"
 fi
 
 if systemctl list-unit-files %s.service >/dev/null 2>&1; then
   if sudo systemctl is-active --quiet %s; then
     pass systemd "service active"
   else
-    fail systemd "service not active (run: vpsdeploy deploy)"
+    fail systemd "service not active (run: landfall deploy)"
   fi
 else
-  fail systemd "unit missing (run: vpsdeploy bootstrap)"
+  fail systemd "unit missing (run: landfall bootstrap)"
 fi
 
 # PostgreSQL
@@ -188,10 +188,10 @@ if [ "%s" = "true" ]; then
     if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='%s'" | grep -q 1; then
       pass postgres "database %s exists"
     else
-      fail postgres "database missing (run: vpsdeploy db bootstrap)"
+      fail postgres "database missing (run: landfall db bootstrap)"
     fi
   else
-    fail postgres "not running (run: vpsdeploy db bootstrap)"
+    fail postgres "not running (run: landfall db bootstrap)"
   fi
 else
   skip postgres "not configured"
@@ -203,10 +203,10 @@ if [ "%s" = "true" ]; then
     if redis-cli -p %d ACL GETUSER %s >/dev/null 2>&1; then
       pass redis "ACL user %s (db %d)"
     else
-      fail redis "ACL user missing (run: vpsdeploy redis bootstrap)"
+      fail redis "ACL user missing (run: landfall redis bootstrap)"
     fi
   else
-    fail redis "not running (run: vpsdeploy redis bootstrap)"
+    fail redis "not running (run: landfall redis bootstrap)"
   fi
 else
   skip redis "not configured"
@@ -225,7 +225,7 @@ if [ -n "%s" ]; then
     echo "health_body=$BODY" >> "$RESULT"
   fi
 else
-  skip health_endpoint "health_check not configured in vpsdeploy.toml"
+  skip health_endpoint "health_check not configured in landfall.toml"
 fi
 
 chmod 600 "$RESULT"
@@ -236,7 +236,7 @@ chmod 600 "$RESULT"
 		boolString(expectRedis), redisPort, redisUser, redisUser, redisDB,
 		healthURL, healthURL, healthURL, healthURL)
 
-	if _, err := client.RunScript("vpsdeploy-check.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-check.sh", script); err != nil {
 		return nil, err
 	}
 

@@ -2,7 +2,7 @@
 // Copy to your webapp: app/api/health/route.ts
 //
 // Validates app runtime plus optional PostgreSQL and Redis connectivity.
-// vpsdeploy check and vpsdeploy deploy expect JSON with "ok": true.
+// landfall check and landfall deploy expect JSON with "ok": true.
 
 import { NextResponse } from "next/server";
 

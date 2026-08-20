@@ -36,7 +36,7 @@ func Harden(cfg *config.ResolvedConfig, opts HardenOptions) error {
 	fmt.Fprintln(os.Stdout, "This enables unattended security updates, UFW firewall, fail2ban, and SSH hardening.")
 
 	script := buildHardenScript(opts)
-	if _, err := client.RunScript("vpsdeploy-security-harden.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-security-harden.sh", script); err != nil {
 		return err
 	}
 
@@ -103,15 +103,17 @@ fi
 echo ""
 
 echo "=== SSH hardening ==="
-if [ -f /etc/ssh/sshd_config.d/99-vpsdeploy.conf ]; then
+if [ -f /etc/ssh/sshd_config.d/99-landfall.conf ]; then
+  cat /etc/ssh/sshd_config.d/99-landfall.conf
+elif [ -f /etc/ssh/sshd_config.d/99-vpsdeploy.conf ]; then
   cat /etc/ssh/sshd_config.d/99-vpsdeploy.conf
 else
-  echo "vpsdeploy SSH drop-in not found"
+  echo "landfall SSH drop-in not found"
   sudo sshd -T 2>/dev/null | grep -E '^(permitrootlogin|passwordauthentication|port) ' || true
 fi
 `
 
-	_, err = client.RunScript("vpsdeploy-security-status.sh", script)
+	_, err = client.RunScript("landfall-security-status.sh", script)
 	return err
 }
 
@@ -166,7 +168,7 @@ if [ -f /etc/apt/apt.conf.d/50unattended-upgrades ]; then
   sudo sed -i 's|^//\s*"${distro_id}:${distro_codename}-security";|"${distro_id}:${distro_codename}-security";|' /etc/apt/apt.conf.d/50unattended-upgrades || true
 fi
 
-sudo tee /etc/apt/apt.conf.d/52vpsdeploy-unattended-upgrades >/dev/null <<EOF
+sudo tee /etc/apt/apt.conf.d/52landfall-unattended-upgrades >/dev/null <<EOF
 Unattended-Upgrade::Automatic-Reboot "%s";
 %s
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
@@ -183,7 +185,7 @@ sudo ufw default allow outgoing
 sudo ufw --force enable
 
 # --- fail2ban ---
-sudo tee /etc/fail2ban/jail.d/vpsdeploy-sshd.local >/dev/null <<'EOF'
+sudo tee /etc/fail2ban/jail.d/landfall-sshd.local >/dev/null <<'EOF'
 [sshd]
 enabled = true
 port = ssh
@@ -198,8 +200,8 @@ sudo systemctl enable fail2ban
 sudo systemctl restart fail2ban
 
 # --- SSH hardening (drop-in, reversible) ---
-sudo tee /etc/ssh/sshd_config.d/99-vpsdeploy.conf >/dev/null <<'EOF'
-# Managed by vpsdeploy security harden
+sudo tee /etc/ssh/sshd_config.d/99-landfall.conf >/dev/null <<'EOF'
+# Managed by landfall security harden
 PermitRootLogin %s
 PasswordAuthentication %s
 KbdInteractiveAuthentication no
@@ -208,8 +210,8 @@ AllowTcpForwarding no
 EOF
 
 if ! sudo sshd -t; then
-  echo "SSH config test failed; removing vpsdeploy drop-in" >&2
-  sudo rm -f /etc/ssh/sshd_config.d/99-vpsdeploy.conf
+  echo "SSH config test failed; removing landfall drop-in" >&2
+  sudo rm -f /etc/ssh/sshd_config.d/99-landfall.conf
   exit 1
 fi
 
@@ -261,7 +263,7 @@ func printPostHardenNotes(opts HardenOptions) {
 	fmt.Fprintln(os.Stdout, "  - Unattended security upgrades (auto-update)")
 	fmt.Fprintln(os.Stdout, "  - UFW firewall (SSH, HTTP, HTTPS)")
 	fmt.Fprintln(os.Stdout, "  - fail2ban SSH protection")
-	fmt.Fprintln(os.Stdout, "  - SSH hardening via /etc/ssh/sshd_config.d/99-vpsdeploy.conf")
+	fmt.Fprintln(os.Stdout, "  - SSH hardening via /etc/ssh/sshd_config.d/99-landfall.conf")
 	fmt.Fprintln(os.Stdout, "  - Secret file permissions (deploy dir 750, .env.production 600)")
 
 	if opts.DisableSSHPassword {
@@ -275,5 +277,5 @@ func printPostHardenNotes(opts HardenOptions) {
 	}
 
 	fmt.Fprintln(os.Stdout, "")
-	fmt.Fprintf(os.Stdout, "Check status: vpsdeploy security status --env <env>\n")
+	fmt.Fprintf(os.Stdout, "Check status: landfall security status --env <env>\n")
 }

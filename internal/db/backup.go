@@ -50,8 +50,8 @@ sudo mkdir -p "$DIR"
 sudo chown root:root "$DIR"
 sudo chmod 750 "$DIR"
 
-sudo -u postgres pg_dump -Fc -d "$DB" -f "/tmp/vpsdeploy-pg.dump"
-sudo mv /tmp/vpsdeploy-pg.dump "$FILE"
+sudo -u postgres pg_dump -Fc -d "$DB" -f "/tmp/landfall-pg.dump"
+sudo mv /tmp/landfall-pg.dump "$FILE"
 sudo chmod 640 "$FILE"
 
 # Prune old dumps
@@ -61,7 +61,7 @@ ls -lh "$FILE"
 echo "BACKUP_PATH=$FILE"
 `, util.ShellQuote(dir), util.ShellQuote(remotePath), util.ShellQuote(dbName), retain)
 
-	if _, err := client.RunScript("vpsdeploy-db-backup.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-db-backup.sh", script); err != nil {
 		return err
 	}
 
@@ -92,17 +92,17 @@ echo "Local backups in $DIR:"
 if [ -d "$DIR" ]; then
   sudo ls -lh "$DIR"/*.dump 2>/dev/null || echo "  (none)"
 else
-  echo "  (directory missing — run: vpsdeploy db backup)"
+  echo "  (directory missing — run: landfall db backup)"
 fi
 `, util.ShellQuote(dir))
 
-	_, err = client.RunScript("vpsdeploy-db-backups.sh", script)
+	_, err = client.RunScript("landfall-db-backups.sh", script)
 	return err
 }
 
 func Restore(cfg *config.ResolvedConfig, file string, yes bool) error {
 	if strings.TrimSpace(file) == "" {
-		return fmt.Errorf("--file is required (path on the DB host, e.g. /var/backups/vpsdeploy/prod/foo.dump)")
+		return fmt.Errorf("--file is required (path on the DB host, e.g. /var/backups/landfall/prod/foo.dump)")
 	}
 	if !yes {
 		return fmt.Errorf("refusing to restore without --yes (destructive)")
@@ -137,7 +137,7 @@ sudo -u postgres pg_restore --clean --if-exists -d "$DB" "$FILE"
 echo "Restore finished."
 `, util.ShellQuote(file), util.ShellQuote(dbName))
 
-	_, err = client.RunScript("vpsdeploy-db-restore.sh", script)
+	_, err = client.RunScript("landfall-db-restore.sh", script)
 	return err
 }
 
@@ -153,7 +153,7 @@ func Schedule(cfg *config.ResolvedConfig, opts ScheduleOptions) error {
 		hour = 3
 	}
 
-	unit := fmt.Sprintf("vpsdeploy-db-backup-%s", cfg.EnvName)
+	unit := fmt.Sprintf("landfall-db-backup-%s", cfg.EnvName)
 	dir := cfg.PostgresBackupDir()
 	dbName, err := cfg.PostgresDatabase()
 	if err != nil {
@@ -162,7 +162,7 @@ func Schedule(cfg *config.ResolvedConfig, opts ScheduleOptions) error {
 	retain := cfg.PostgresBackupRetainDays()
 
 	script := buildScheduleScript(cfg, unit, dir, dbName, retain, hour, opts.Upload)
-	_, err = client.RunScript("vpsdeploy-db-schedule.sh", script)
+	_, err = client.RunScript("landfall-db-schedule.sh", script)
 	return err
 }
 
@@ -206,8 +206,8 @@ STAMP=\$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
 FILE="\$DIR/\${DB}_\${STAMP}.dump"
 mkdir -p "\$DIR"
 chmod 750 "\$DIR"
-sudo -u postgres pg_dump -Fc -d "\$DB" -f /tmp/vpsdeploy-pg.dump
-mv /tmp/vpsdeploy-pg.dump "\$FILE"
+sudo -u postgres pg_dump -Fc -d "\$DB" -f /tmp/landfall-pg.dump
+mv /tmp/landfall-pg.dump "\$FILE"
 chmod 640 "\$FILE"
 find "\$DIR" -type f -name '*.dump' -mtime +"\$RETAIN_DAYS" -delete
 %s
@@ -216,7 +216,7 @@ sudo chmod 750 /usr/local/bin/${UNIT}.sh
 
 sudo tee /etc/systemd/system/${UNIT}.service >/dev/null <<EOF
 [Unit]
-Description=vpsdeploy PostgreSQL backup (${UNIT})
+Description=landfall PostgreSQL backup (${UNIT})
 After=postgresql.service
 
 [Service]
@@ -226,7 +226,7 @@ EOF
 
 sudo tee /etc/systemd/system/${UNIT}.timer >/dev/null <<EOF
 [Unit]
-Description=Daily vpsdeploy PostgreSQL backup (${UNIT})
+Description=Daily landfall PostgreSQL backup (${UNIT})
 
 [Timer]
 OnCalendar=*-*-* ${HOUR}:00:00
@@ -274,7 +274,7 @@ aws s3 cp "$FILE" "s3://%s/%s" --endpoint-url %s
 `, util.ShellQuote(remoteFile), util.ShellQuote(accessKey), util.ShellQuote(secretKey),
 		util.ShellQuote(region), bucket, destKey, util.ShellQuote(endpoint))
 
-	_, err = client.RunScript("vpsdeploy-db-backup-upload.sh", script)
+	_, err = client.RunScript("landfall-db-backup-upload.sh", script)
 	return err
 }
 
@@ -290,7 +290,7 @@ func s3Settings(cfg *config.ResolvedConfig) (endpoint, bucket, prefix, region, a
 	bucket = strings.TrimSpace(p.BackupS3Bucket)
 	prefix = strings.TrimSpace(p.BackupS3Prefix)
 	if prefix == "" {
-		prefix = fmt.Sprintf("vpsdeploy/%s/%s", cfg.Project.Project.Name, cfg.EnvName)
+		prefix = fmt.Sprintf("landfall/%s/%s", cfg.Project.Project.Name, cfg.EnvName)
 	}
 	region = strings.TrimSpace(p.BackupS3Region)
 	if region == "" {

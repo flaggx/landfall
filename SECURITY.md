@@ -9,8 +9,8 @@ Do **not** include production secrets, private keys, or customer data in reports
 
 ## Private configuration
 
-`vpsdeploy.toml` with real hostnames/IPs belongs in your **application** repository
+`landfall.toml` with real hostnames/IPs belongs in your **application** repository
 (or stays untracked locally). Never commit it to this tooling repository.
 
-Secrets live only in `~/.config/vpsdeploy/secrets.toml` on your machine and are
+Secrets live only in `~/.config/landfall/secrets.toml` on your machine and are
 injected at deploy time — they must never be committed.

@@ -10,7 +10,7 @@ import (
 
 func EnforcePermissions(cfg *config.ResolvedConfig, client *ssh.Client) error {
 	script := BuildPermissionsScript(cfg.Environment.Path, cfg.Environment.User)
-	_, err := client.RunScript("vpsdeploy-security-permissions.sh", script)
+	_, err := client.RunScript("landfall-security-permissions.sh", script)
 	return err
 }
 
@@ -70,7 +70,7 @@ if [ -f "$DEPLOY_PATH/.env.production" ]; then
     fail permissions_env_file "expected owner=$DEPLOY_USER mode=600, got owner=$ENV_OWNER mode=$ENV_MODE"
   fi
 elif [ "$EXPECT_ENV" = "true" ]; then
-  fail permissions_env_file ".env.production missing (run: vpsdeploy deploy)"
+  fail permissions_env_file ".env.production missing (run: landfall deploy)"
 else
   skip permissions_env_file "not configured"
 fi
