@@ -15,7 +15,7 @@ Deploy Git repos to a VPS from your local machine — similar to the core loop o
 
 ## Install
 
-Requires Go 1.22+.
+Requires Go 1.22+ (see `go.mod` for the version CI uses).
 
 ```bash
 git clone git@github.com:flaggx/vpsdeploymentautomation.git
