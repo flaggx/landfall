@@ -11,19 +11,50 @@ landfall deploy --env prod
 
 Formerly known as `vpsdeploy`. Existing `vpsdeploy.toml` and `~/.config/vpsdeploy/` still work.
 
-## Why this exists
+## Who Landfall is for
 
-Managed hosts are great until bills, lock-in, or limits get in the way. **Landfall** is for tech-savvy developers who want:
+Landfall targets a narrow niche: **solo developers and small teams who want a single Ubuntu VPS (or a small set of them) to feel like a managed platform**, without Docker, Kubernetes, or a self-hosted PaaS control plane on the box.
 
-- Push-to-deploy style workflows you control
-- Secrets that never live in git
-- Optional Postgres / Redis / Caddy on the same (or separate) VPS
-- Backups and a clear path to scale out later
+You write an app (especially Next.js standalone), point DNS at a VPS, and use a local CLI — or an AI agent running that CLI — to harden the host, ship code over Git, wire Caddy/HTTPS, Postgres, Redis, secrets, and backups. The app runs as a normal **systemd** service. There is no dashboard daemon eating RAM on the server.
 
-You run the CLI from your laptop (or ask your AI agent to run it). The VPS builds and runs the app under systemd.
+**Choose Landfall if you want:**
+
+- Full control and predictable cost on Hetzner / DigitalOcean / similar
+- Deploy from your laptop (or CI / an agent) via SSH — nothing permanent installed except the app stack
+- Secrets kept locally under `~/.config/landfall/`, never in git
+- Opinionated defaults for Node/Next + Caddy + Postgres + Redis on Ubuntu
+- A workflow that is easy to script and safe to hand to an AI coding agent
+
+**Choose something else if you want:**
+
+- Git-push Heroku UX with a web UI → [Dokku](https://dokku.com/), [Coolify](https://coolify.io/), [CapRover](https://caprover.com/)
+- Zero-downtime container deploys without a PaaS → [Kamal](https://kamal-deploy.org/)
+- Elastic scale, multi-region, or “never SSH” → a managed platform (Vercel, Fly, Railway, etc.)
+- Highly custom multi-service infra → Ansible / Terraform and your own playbooks
+
+### Pros
+
+- Thin local CLI; the VPS stays a normal Linux box you can still reason about
+- No Docker/registry required for the default path
+- Built-in path for secrets, DB/Redis bootstrap, HTTPS, hardening, health checks, backups
+- Legacy `vpsdeploy.toml` / `~/.config/vpsdeploy` still work after the rename
+- Agent-friendly command surface (see [Use with your AI agent](#use-with-your-ai-agent))
+
+### Cons
+
+- You own the server: updates, disk, incidents, and capacity planning are yours
+- Best-fit is Ubuntu + Node/Next standalone; other stacks need more DIY
+- Not a multi-tenant PaaS — one opinionated deploy model, not 200 one-click templates
+- Zero-downtime and blue/green are not the primary design (systemd restart + health check)
+- Smaller ecosystem than Kamal / Coolify / Dokku — expect to read the README and open issues
+
+### Why someone would use it
+
+PaaS bills and limits pushed you toward a VPS, but you do not want to reinvent deploy scripts every project — and you also do not want a heavyweight control plane or Docker as a prerequisite. Landfall is the middle path: **managed-platform habits on infrastructure you own**, optimized for a few serious apps rather than a fleet of experiments.
 
 ## Table of contents
 
+- [Who Landfall is for](#who-landfall-is-for)
 - [Install](#install)
 - [Use manually](#use-manually)
 - [Use with your AI agent](#use-with-your-ai-agent)
