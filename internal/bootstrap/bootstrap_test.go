@@ -6,7 +6,7 @@ import (
 	"testing"
 	"text/template"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
+	"github.com/flaggx/landfall/internal/config"
 )
 
 func TestShellQuote(t *testing.T) {

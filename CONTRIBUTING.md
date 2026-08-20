@@ -19,8 +19,8 @@ AI-assisted contributions are welcome. Please run the checks below and read your
 - Make (optional)
 
 ```bash
-git clone https://github.com/flaggx/vpsdeploymentautomation.git
-cd vpsdeploymentautomation
+git clone https://github.com/flaggx/landfall.git
+cd landfall
 make build
 ./bin/landfall --help
 ```

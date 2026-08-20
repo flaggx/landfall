@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
+	"github.com/flaggx/landfall/internal/config"
 )
 
 func testCfg(t *testing.T, remote bool) *config.ResolvedConfig {

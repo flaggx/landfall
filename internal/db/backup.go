@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
-	"github.com/flaggx/vpsdeploymentautomation/internal/util"
+	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/util"
 )
 
 type BackupOptions struct {

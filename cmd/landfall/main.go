@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/cli"
+	"github.com/flaggx/landfall/internal/cli"
 )
 
 func main() {

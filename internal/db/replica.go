@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
-	"github.com/flaggx/vpsdeploymentautomation/internal/ssh"
-	"github.com/flaggx/vpsdeploymentautomation/internal/util"
+	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/ssh"
+	"github.com/flaggx/landfall/internal/util"
 )
 
 type ReplicaOptions struct {

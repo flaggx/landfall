@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/flaggx/vpsdeploymentautomation/internal/redis"
+	"github.com/flaggx/landfall/internal/redis"
 	"github.com/spf13/cobra"
 )
 

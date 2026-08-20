@@ -48,8 +48,8 @@ You run the CLI from your laptop (or ask your AI agent to run it). The VPS build
 Requires Go (see `go.mod`) and SSH access to an Ubuntu 22.04/24.04 VPS.
 
 ```bash
-git clone https://github.com/flaggx/vpsdeploymentautomation.git
-cd vpsdeploymentautomation
+git clone https://github.com/flaggx/landfall.git
+cd landfall
 make install    # builds and copies to ~/bin/landfall
 ```
 
@@ -84,7 +84,7 @@ Run these from your **webapp** repo (not this tooling repo). Real `landfall.toml
 
 ```bash
 # 1. Install the CLI (once on your laptop)
-cd /path/to/vpsdeploymentautomation && make install
+cd /path/to/landfall && make install
 
 # 2. Create config + secrets store
 cd /path/to/your-webapp

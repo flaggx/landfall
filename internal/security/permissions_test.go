@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/util"
+	"github.com/flaggx/landfall/internal/util"
 )
 
 func TestBuildPermissionsScript(t *testing.T) {

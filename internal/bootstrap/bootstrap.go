@@ -8,8 +8,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
-	"github.com/flaggx/vpsdeploymentautomation/internal/ssh"
+	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/ssh"
 )
 
 //go:embed templates/systemd.service.tmpl

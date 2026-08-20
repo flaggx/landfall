@@ -1,4 +1,4 @@
-module github.com/flaggx/vpsdeploymentautomation
+module github.com/flaggx/landfall
 
 go 1.26.4
 

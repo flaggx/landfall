@@ -3,7 +3,7 @@ package check
 import (
 	"testing"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
+	"github.com/flaggx/landfall/internal/config"
 )
 
 func TestParseRemoteResults(t *testing.T) {

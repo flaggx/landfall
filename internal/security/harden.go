@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
-	"github.com/flaggx/vpsdeploymentautomation/internal/ssh"
+	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/ssh"
 )
 
 type HardenOptions struct {

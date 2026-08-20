@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
+	"github.com/flaggx/landfall/internal/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

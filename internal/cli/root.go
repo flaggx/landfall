@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/flaggx/vpsdeploymentautomation/internal/bootstrap"
-	"github.com/flaggx/vpsdeploymentautomation/internal/config"
-	"github.com/flaggx/vpsdeploymentautomation/internal/deploy"
+	"github.com/flaggx/landfall/internal/bootstrap"
+	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/deploy"
 	"github.com/spf13/cobra"
 )
 
