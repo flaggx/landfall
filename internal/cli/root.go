@@ -14,6 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is set at build time via -ldflags (see Makefile / GoReleaser).
+var Version = "dev"
+
 var (
 	projectDir string
 	envName    string
@@ -24,17 +27,23 @@ var (
 
 func NewRoot() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "landfall",
-		Short: "Make landfall on your VPS — deploy Git apps without big-cloud lock-in",
+		Use:     "landfall",
+		Short:   "Make landfall on your VPS — deploy Git apps without big-cloud lock-in",
+		Version: Version,
 		Long: `Landfall deploys Git apps to your own Ubuntu VPS: build on the server, systemd,
 secrets, optional Postgres/Redis/Caddy, backups, and a path to scale out.
 
 Config: landfall.toml (or legacy vpsdeploy.toml) in your app repo.
-Secrets: ~/.config/landfall/ (or legacy ~/.config/vpsdeploy/).`,
+Secrets: ~/.config/landfall/ (or legacy ~/.config/vpsdeploy/).
+
+Supported core path: init → security harden → bootstrap → optional db/redis
+bootstrap → secrets → deploy → check. See README for experimental commands.`,
 	}
 
+	root.SetVersionTemplate("landfall {{.Version}}\n")
 	root.PersistentFlags().StringVar(&projectDir, "project-dir", ".", "Directory containing landfall.toml (or vpsdeploy.toml)")
 
+	root.AddCommand(newVersionCmd())
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newBootstrapCmd())
 	root.AddCommand(newDeployCmd())
@@ -47,6 +56,16 @@ Secrets: ~/.config/landfall/ (or legacy ~/.config/vpsdeploy/).`,
 	root.AddCommand(newCheckCmd())
 
 	return root
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print landfall version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "landfall %s\n", Version)
+		},
+	}
 }
 
 func newInitCmd() *cobra.Command {

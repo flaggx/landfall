@@ -52,6 +52,21 @@ You write an app (especially Next.js standalone), point DNS at a VPS, and use a 
 
 PaaS bills and limits pushed you toward a VPS, but you do not want to reinvent deploy scripts every project — and you also do not want a heavyweight control plane or Docker as a prerequisite. Landfall is the middle path: **managed-platform habits on infrastructure you own**, optimized for a few serious apps rather than a fleet of experiments.
 
+### Supported vs experimental (v0.1)
+
+**Supported core path**
+
+`init` → `security harden` → `bootstrap` → optional `db` / `redis` bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`
+
+Also supported: local `db backup`, `db backups`, `db restore`, `db schedule`.
+
+**Experimental** (available, but expect manual follow-up — not marketed as ready)
+
+- `db replica bootstrap` — changes primary Postgres listen/HBA/WAL; production-risky
+- `db pooler` — installs PgBouncer with placeholder auth; finish `userlist.txt` yourself
+- `db backup --upload` / `db schedule --upload` — off-site S3 path; verify your bucket/credentials before relying on it
+- HA failover (Patroni) — roadmap only
+
 ## Table of contents
 
 - [Who Landfall is for](#who-landfall-is-for)
@@ -76,7 +91,17 @@ PaaS bills and limits pushed you toward a VPS, but you do not want to reinvent d
 
 ## Install
 
-Requires Go (see `go.mod`) and SSH access to an Ubuntu 22.04/24.04 VPS.
+Requires Go 1.22+ (see `go.mod`) and SSH access to an Ubuntu 22.04/24.04 VPS.
+
+**Recommended** (after a tagged release):
+
+```bash
+go install github.com/flaggx/landfall/cmd/landfall@v0.1.0
+```
+
+Or download a Linux binary from the [GitHub Releases](https://github.com/flaggx/landfall/releases) page.
+
+From source:
 
 ```bash
 git clone https://github.com/flaggx/landfall.git
@@ -87,12 +112,13 @@ make install    # builds and copies to ~/bin/landfall
 Or:
 
 ```bash
-go build -o ~/bin/landfall ./cmd/landfall/
+go build -ldflags "-X github.com/flaggx/landfall/internal/cli.Version=dev" -o ~/bin/landfall ./cmd/landfall/
 ```
 
-Ensure `~/bin` is on your `PATH`, then:
+Ensure `~/bin` (or your Go bin dir, usually `$(go env GOPATH)/bin`) is on your `PATH`, then:
 
 ```bash
+landfall version
 landfall --help
 ```
 
@@ -292,12 +318,13 @@ landfall deploy --env prod
 | `landfall status` / `logs` | Service status and systemd logs |
 | `landfall secrets …` | Local secrets store (see below) |
 | `landfall db bootstrap` | Install Postgres + create DB/user |
-| `landfall db backup` / `backups` / `restore` / `schedule` | Backups |
-| `landfall db replica bootstrap --replica-host <ip>` | Streaming read replica |
-| `landfall db pooler` | PgBouncer on the DB host |
+| `landfall db backup` / `backups` / `restore` / `schedule` | Local backups (S3 upload optional) |
+| `landfall db replica bootstrap --replica-host <ip>` | Streaming read replica (**experimental**) |
+| `landfall db pooler` | PgBouncer on the DB host (**experimental**) |
 | `landfall redis bootstrap` | Redis + ACL user |
 | `landfall security harden` / `status` | Ubuntu hardening |
 | `landfall check` | Full setup validation |
+| `landfall version` | Print CLI version |
 
 **Global flag:** `--project-dir` (default `.`) — directory containing `landfall.toml`.
 
@@ -389,15 +416,15 @@ backup_s3_prefix = "landfall/my-webapp/prod"
 backup_s3_region = "auto"
 ```
 
-And secrets: `backup_s3_access_key`, `backup_s3_secret_key`.
+And secrets: `backup_s3_access_key`, `backup_s3_secret_key`. Verify a manual `--upload` before depending on scheduled off-site copies.
 
 ### Scale ladder (self-hosted “managed” feel)
 
 1. **Vertical** — resize the VPS  
-2. **Backups** — `db backup` / `db schedule` (+ off-site)  
+2. **Backups** — `db backup` / `db schedule` (+ off-site after you verify uploads)  
 3. **Dedicated DB host** — `postgres.host` + `app_host`, then `db bootstrap`  
-4. **Pooler** — `landfall db pooler --env prod`  
-5. **Read replica** — `landfall db replica bootstrap --env prod --replica-host <ip>`  
+4. **Pooler** — `landfall db pooler --env prod` (**experimental**; finish auth manually)  
+5. **Read replica** — `landfall db replica bootstrap --env prod --replica-host <ip>` (**experimental**)  
 6. **HA failover** — roadmap (Patroni), not automated yet  
 
 ---

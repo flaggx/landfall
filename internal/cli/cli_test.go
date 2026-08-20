@@ -33,10 +33,24 @@ func TestRootHelpListsCoreCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, cmd := range []string{"deploy", "bootstrap", "secrets", "db", "redis", "check", "security"} {
+	for _, cmd := range []string{"deploy", "bootstrap", "secrets", "db", "redis", "check", "security", "version"} {
 		if !strings.Contains(out, cmd) {
 			t.Fatalf("help missing %q:\n%s", cmd, out)
 		}
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	root := NewRoot()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "landfall") {
+		t.Fatalf("version output: %q", buf.String())
 	}
 }
 
@@ -50,7 +64,7 @@ func TestDBHelpListsBackupCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, cmd := range []string{"backup", "restore", "schedule", "replica", "pooler"} {
+	for _, cmd := range []string{"backup", "restore", "schedule", "replica", "pooler", "Experimental"} {
 		if !strings.Contains(out, cmd) {
 			t.Fatalf("db help missing %q:\n%s", cmd, out)
 		}

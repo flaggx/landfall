@@ -21,7 +21,10 @@ func newDBCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "db",
 		Short: "Manage PostgreSQL on the VPS",
-		Long:  "Install and configure PostgreSQL with optional backups, dedicated hosts, replicas, and PgBouncer.",
+		Long: `Install and configure PostgreSQL with optional backups and dedicated hosts.
+
+Supported: bootstrap, status, backup, backups, restore, schedule.
+Experimental: replica, pooler (see command help before use).`,
 	}
 
 	cmd.AddCommand(newDBBootstrapCmd())
@@ -87,7 +90,7 @@ func newDBBackupCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
-	cmd.Flags().BoolVar(&backupUpload, "upload", false, "Upload dump to configured S3-compatible bucket")
+	cmd.Flags().BoolVar(&backupUpload, "upload", false, "Upload dump to configured S3-compatible bucket (requires S3 secrets; verify before relying on off-site)")
 	return cmd
 }
 
@@ -149,11 +152,15 @@ func newDBScheduleCmd() *cobra.Command {
 func newDBReplicaCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "replica",
-		Short: "Manage streaming read replicas",
+		Short: "Manage streaming read replicas (experimental)",
+		Long: `Experimental: bootstrap a streaming standby. Changes primary listen/HBA/WAL
+settings and can be destructive. Not part of the supported v0.1 path — prefer
+dedicated DB host + backups first.`,
 	}
 	boot := &cobra.Command{
 		Use:   "bootstrap",
-		Short: "Bootstrap a streaming standby on --replica-host",
+		Short: "Bootstrap a streaming standby on --replica-host (experimental)",
+		Long:  "Experimental. Configures primary + standby for streaming replication. Review carefully before running on production.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfigForConnection()
 			if err != nil {
@@ -175,7 +182,10 @@ func newDBReplicaCmd() *cobra.Command {
 func newDBPoolerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pooler",
-		Short: "Install PgBouncer connection pooler on the DB host",
+		Short: "Install PgBouncer on the DB host (experimental)",
+		Long: `Experimental: installs PgBouncer with placeholder auth. You must finish
+userlist.txt / auth setup manually before pointing the app at the pooler.
+Not part of the supported v0.1 path.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfigForConnection()
 			if err != nil {
