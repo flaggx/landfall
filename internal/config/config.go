@@ -23,8 +23,8 @@ type GlobalConfig struct {
 }
 
 type ProjectConfig struct {
-	Project      Project                    `toml:"project"`
-	Environments map[string]Environment     `toml:"environments"`
+	Project      Project                `toml:"project"`
+	Environments map[string]Environment `toml:"environments"`
 }
 
 type Project struct {

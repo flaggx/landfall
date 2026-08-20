@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -130,13 +131,21 @@ func writeEnvFile(client *ssh.Client, cfg *config.ResolvedConfig) error {
 		return nil
 	}
 
-	var b strings.Builder
-	for key, value := range cfg.Environment.Env {
-		b.WriteString(fmt.Sprintf("%s=%s\n", key, shellQuoteValue(value)))
-	}
-
 	envPath := cfg.Environment.Path + "/.env.production"
-	return client.UploadFile(envPath, []byte(b.String()), 0o600)
+	return client.UploadFile(envPath, []byte(formatEnvFile(cfg.Environment.Env)), 0o600)
+}
+
+func formatEnvFile(env map[string]string) string {
+	var b strings.Builder
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		b.WriteString(fmt.Sprintf("%s=%s\n", key, shellQuoteValue(env[key])))
+	}
+	return b.String()
 }
 
 func enforcePermissions(client *ssh.Client, cfg *config.ResolvedConfig) error {

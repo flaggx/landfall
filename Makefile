@@ -1,4 +1,4 @@
-.PHONY: build install test vet fmt clean help
+.PHONY: build install test vet fmt clean check help
 
 BINARY := vpsdeploy
 CMD := ./cmd/vpsdeploy
@@ -9,9 +9,10 @@ help:
 	@echo "Available targets:"
 	@echo "  build    - Build the vpsdeploy binary to $(BUILD_DIR)/"
 	@echo "  install  - Build and copy to $(INSTALL_DIR)/"
-	@echo "  test     - Run all tests"
+	@echo "  test     - Run all unit tests"
 	@echo "  vet      - Run go vet"
 	@echo "  fmt      - Format Go source files"
+	@echo "  check    - Contributor gate: fmt check + vet + race tests"
 	@echo "  clean    - Remove build artifacts"
 
 build:
@@ -31,6 +32,11 @@ vet:
 
 fmt:
 	gofmt -w .
+
+check:
+	@test -z "$$(gofmt -l .)" || (echo "gofmt needed on:" && gofmt -l . && exit 1)
+	go vet ./...
+	go test -race ./...
 
 clean:
 	rm -rf $(BUILD_DIR)/$(BINARY)

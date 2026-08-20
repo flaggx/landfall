@@ -149,7 +149,7 @@ func sanitizePostgresIdentifier(value string) string {
 	value = strings.ToLower(value)
 	var b strings.Builder
 	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
 			b.WriteRune(r)
 		} else if r == '-' || r == '.' {
 			b.WriteRune('_')

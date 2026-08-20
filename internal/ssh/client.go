@@ -14,9 +14,9 @@ import (
 )
 
 type Client struct {
-	conn   *gossh.Client
-	host   string
-	user   string
+	conn    *gossh.Client
+	host    string
+	user    string
 	keyPath string
 }
 

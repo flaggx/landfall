@@ -26,7 +26,6 @@ func TestBuildPermissionsScript(t *testing.T) {
 	}
 }
 
-
 func TestBuildPermissionsCheckScript(t *testing.T) {
 	script := BuildPermissionsCheckScript("/var/www/app-prod", "deploy", true)
 	if !strings.Contains(script, "permissions_env_file") {

@@ -454,7 +454,7 @@ sequenceDiagram
 This is a community-friendly FOSS project. Bug reports, docs fixes, and features are welcome.
 
 1. Fork and branch from `main`
-2. `make fmt test vet`
+2. `make check` (fmt + vet + race tests — same as CI)
 3. Open a PR with a short “why”
 
 Details: [CONTRIBUTING.md](CONTRIBUTING.md) · Issues: please redact IPs, hostnames, and secrets.

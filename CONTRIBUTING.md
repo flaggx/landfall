@@ -55,7 +55,14 @@ templates/           Examples for apps (not real project configs)
 
 1. Branch from `main`
 2. Make focused changes
-3. Run `make fmt test vet`
+3. Run the contributor gate before opening a PR:
+
+```bash
+make check
+```
+
+That runs `gofmt` verification, `go vet`, and `go test -race ./...`. CI runs the same target.
+
 4. Update the README if user-facing behavior changes
 5. Open a PR with a short summary of **why**
 
@@ -64,7 +71,15 @@ templates/           Examples for apps (not real project configs)
 1. Implement under `internal/`
 2. Wire in `internal/cli/`
 3. Document in `README.md` (manual + agent sections if relevant)
-4. Add unit tests for pure logic (no real VPS required)
+4. Add unit tests for pure logic and generated scripts (no real VPS required)
+
+## Test expectations
+
+- Prefer table-driven unit tests
+- Assert on generated bash scripts with `strings.Contains` (or goldens) for bootstrap/backup/harden paths
+- Use `t.TempDir` + `t.Setenv("HOME", …)` for secrets/config file tests
+- Do **not** require SSH, apt, or a live VPS in CI tests
+- Cover new CLI commands at least with `--help` smoke tests when adding cobra commands
 
 ## Secrets & privacy
 
