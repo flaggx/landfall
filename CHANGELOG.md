@@ -5,6 +5,19 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-26
+
+### Security
+
+- SSH client used `InsecureIgnoreHostKey()`, accepting any server key with
+  no verification and leaving every connection open to MITM. Now verifies
+  against `~/.ssh/known_hosts` with trust-on-first-use, and rejects a host
+  whose key has changed.
+- `.env.production` values were only escaped for double-quoted shell
+  strings, so a secret containing `$`, `` ` ``, or `\` could be expanded or
+  executed when `buildApp` sourced the file with bash. Values are now
+  single-quoted, which bash treats as fully literal.
+
 ## [0.1.1] - 2026-08-20
 
 ### Fixed
@@ -47,5 +60,6 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
+[0.1.2]: https://github.com/flaggx/landfall/releases/tag/v0.1.2
 [0.1.1]: https://github.com/flaggx/landfall/releases/tag/v0.1.1
 [0.1.0]: https://github.com/flaggx/landfall/releases/tag/v0.1.0
