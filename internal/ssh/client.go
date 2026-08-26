@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type Client struct {
@@ -49,12 +51,17 @@ func New(opts Options) (*Client, error) {
 		return nil, fmt.Errorf("parse ssh key: %w", err)
 	}
 
+	hostKeyCallback, err := trustOnFirstUseCallback()
+	if err != nil {
+		return nil, err
+	}
+
 	config := &gossh.ClientConfig{
 		User: opts.User,
 		Auth: []gossh.AuthMethod{
 			gossh.PublicKeys(signer),
 		},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         opts.Timeout,
 	}
 
@@ -69,6 +76,63 @@ func New(opts Options) (*Client, error) {
 		host:    opts.Host,
 		user:    opts.User,
 		keyPath: opts.KeyPath,
+	}, nil
+}
+
+// trustOnFirstUseCallback verifies host keys against ~/.ssh/known_hosts,
+// recording keys for hosts seen for the first time and rejecting any host
+// whose key no longer matches a previously recorded entry (equivalent to
+// `ssh -o StrictHostKeyChecking=accept-new`).
+func trustOnFirstUseCallback() (gossh.HostKeyCallback, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create %s: %w", sshDir, err)
+	}
+
+	knownHostsPath := filepath.Join(sshDir, "known_hosts")
+	f, err := os.OpenFile(knownHostsPath, os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create %s: %w", knownHostsPath, err)
+	}
+	f.Close()
+
+	verify, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf("load %s: %w", knownHostsPath, err)
+	}
+
+	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
+		err := verify(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) {
+			return err
+		}
+		if len(keyErr.Want) > 0 {
+			return fmt.Errorf("REMOTE HOST IDENTIFICATION HAS CHANGED for %s — refusing to connect (possible MITM attack). If this is expected (e.g. VPS was rebuilt), remove the old entry from %s: %w", hostname, knownHostsPath, err)
+		}
+
+		// Unknown host: trust on first use, recording the key for future connections.
+		line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+		f, err := os.OpenFile(knownHostsPath, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("record host key for %s: %w", hostname, err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			return fmt.Errorf("record host key for %s: %w", hostname, err)
+		}
+
+		fmt.Fprintf(os.Stderr, "Permanently added '%s' (%s) to the list of known hosts.\n", hostname, key.Type())
+		return nil
 	}, nil
 }
 

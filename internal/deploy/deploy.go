@@ -143,7 +143,7 @@ func formatEnvFile(env map[string]string) string {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		b.WriteString(fmt.Sprintf("%s=%s\n", key, shellQuoteValue(env[key])))
+		b.WriteString(fmt.Sprintf("%s=%s\n", key, shellQuote(env[key])))
 	}
 	return b.String()
 }
@@ -294,13 +294,6 @@ func Logs(cfg *config.ResolvedConfig, follow bool) error {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
-func shellQuoteValue(s string) string {
-	if strings.ContainsAny(s, " \t\n\"'$\\") {
-		return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
-	}
-	return s
 }
 
 // Avoid unused import when building with certain flags
