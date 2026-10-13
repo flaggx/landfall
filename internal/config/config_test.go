@@ -104,3 +104,21 @@ func TestFindProjectConfig(t *testing.T) {
 		t.Fatalf("expected %s, got %s", path, found)
 	}
 }
+
+func TestResolveBuildMode(t *testing.T) {
+	cases := []struct{ override, configured, want string }{
+		{"", "", BuildRemote},
+		{"", "local", BuildLocal},
+		{"remote", "local", BuildRemote},
+		{"local", "", BuildLocal},
+	}
+	for _, c := range cases {
+		got, err := ResolveBuildMode(c.override, c.configured)
+		if err != nil || got != c.want {
+			t.Errorf("ResolveBuildMode(%q, %q) = %q, %v; want %q", c.override, c.configured, got, err, c.want)
+		}
+	}
+	if _, err := ResolveBuildMode("docker", ""); err == nil {
+		t.Error("unknown build mode should be rejected")
+	}
+}

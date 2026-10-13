@@ -39,16 +39,44 @@ type Project struct {
 }
 
 type Environment struct {
-	Host        string            `toml:"host"`
-	User        string            `toml:"user"`
-	Path        string            `toml:"path"`
-	Branch      string            `toml:"branch"`
-	Port        int               `toml:"port"`
-	HealthCheck string            `toml:"health_check"`
-	Domain      string            `toml:"domain"`
-	Env         map[string]string `toml:"env"`
-	Postgres    *PostgresConfig   `toml:"postgres"`
-	Redis       *RedisConfig      `toml:"redis"`
+	Host        string `toml:"host"`
+	User        string `toml:"user"`
+	Path        string `toml:"path"`
+	Branch      string `toml:"branch"`
+	Port        int    `toml:"port"`
+	HealthCheck string `toml:"health_check"`
+	Domain      string `toml:"domain"`
+	// Build is where the app is built: "remote" (on the VPS, the default) or
+	// "local" (on the machine running landfall, then uploaded).
+	Build string `toml:"build"`
+	// ReleaseCommand runs on the VPS after the build is in place and before
+	// the service restarts (e.g. database migrations).
+	ReleaseCommand string            `toml:"release_command"`
+	Env            map[string]string `toml:"env"`
+	Postgres       *PostgresConfig   `toml:"postgres"`
+	Redis          *RedisConfig      `toml:"redis"`
+}
+
+const (
+	BuildRemote = "remote"
+	BuildLocal  = "local"
+)
+
+// ResolveBuildMode picks the build location: an explicit override (the
+// --build flag) wins, then the environment's `build` setting, then remote.
+func ResolveBuildMode(override, configured string) (string, error) {
+	mode := strings.TrimSpace(override)
+	if mode == "" {
+		mode = strings.TrimSpace(configured)
+	}
+	switch mode {
+	case "", BuildRemote:
+		return BuildRemote, nil
+	case BuildLocal:
+		return BuildLocal, nil
+	default:
+		return "", fmt.Errorf("unknown build mode %q (use %q or %q)", mode, BuildRemote, BuildLocal)
+	}
 }
 
 type SecretsConfig struct {

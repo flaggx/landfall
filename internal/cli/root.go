@@ -34,8 +34,11 @@ var (
 	projectDir string
 	envName    string
 	deployRef  string
-	followLogs bool
-	withCaddy  bool
+
+	deployBuild             string
+	deployAllowNodeMismatch bool
+	followLogs              bool
+	withCaddy               bool
 )
 
 func NewRoot() *cobra.Command {
@@ -117,12 +120,18 @@ func newDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = deploy.Run(cfg, deploy.Options{Ref: deployRef})
+			_, err = deploy.Run(cfg, deploy.Options{
+				Ref:               deployRef,
+				Build:             deployBuild,
+				AllowNodeMismatch: deployAllowNodeMismatch,
+			})
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().StringVar(&deployRef, "ref", "", "Git ref to deploy (branch, tag, or commit). Defaults to configured branch.")
+	cmd.Flags().StringVar(&deployBuild, "build", "", "Where to build: \"remote\" (on the VPS) or \"local\" (on this machine, then upload). Defaults to the environment's build setting, then remote.")
+	cmd.Flags().BoolVar(&deployAllowNodeMismatch, "allow-node-mismatch", false, "Let a local build proceed when this machine and the server run different Node.js major versions")
 	return cmd
 }
 

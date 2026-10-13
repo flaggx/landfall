@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Local builds: `build = "local"` (or `deploy --build local`) compiles the
+  app on the machine running the CLI and uploads it with rsync, instead of
+  building on the VPS. Requires the same OS, CPU and Node.js major version as
+  the server (`--allow-node-mismatch` overrides the Node check).
+- `release_command`: a per-environment command run on the VPS after the build
+  is in place and before the restart, for migrations. `LANDFALL_RELEASE=1` and
+  `LANDFALL_BUILD` are exported to the build.
+
+### Security
+
+- Git refs passed to `deploy --ref` are validated, so a value starting with
+  `-` can no longer be read by git as an option.
+
 ### Fixed
 
 - Redis ACL users were never persisted: `redis bootstrap` ran `ACL SAVE`

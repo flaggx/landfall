@@ -13,6 +13,8 @@ branch = "main"
 port = 3000
 domain = "app.example.com"
 health_check = "http://127.0.0.1:3000/api/health"
+# build = "local"                              # build on this machine and upload (default: "remote")
+# release_command = "npx drizzle-kit migrate"  # runs on the VPS before the restart
 
 [environments.prod.env]
 NODE_ENV = "production"

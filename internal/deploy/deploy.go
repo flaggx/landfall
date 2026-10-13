@@ -15,6 +15,16 @@ import (
 
 type Options struct {
 	Ref string
+	// Build overrides the environment's `build` setting ("local" or "remote").
+	Build string
+	// AllowNodeMismatch lets a local build proceed when this machine and the
+	// server run different Node.js major versions.
+	AllowNodeMismatch bool
+}
+
+type deployStep struct {
+	name string
+	fn   func(*ssh.Client) error
 }
 
 type Result struct {
@@ -28,6 +38,18 @@ type Result struct {
 func Run(cfg *config.ResolvedConfig, opts Options) (*Result, error) {
 	start := time.Now()
 
+	buildMode, err := config.ResolveBuildMode(opts.Build, cfg.Environment.Build)
+	if err != nil {
+		return nil, err
+	}
+	ref := opts.Ref
+	if ref == "" {
+		ref = cfg.Environment.Branch
+	}
+	if err := validateRef(ref); err != nil {
+		return nil, err
+	}
+
 	client, err := ssh.New(ssh.Options{
 		Host:    cfg.Environment.Host,
 		User:    cfg.Environment.User,
@@ -39,26 +61,47 @@ func Run(cfg *config.ResolvedConfig, opts Options) (*Result, error) {
 	defer client.Close()
 
 	serviceName := cfg.ServiceName()
-	ref := opts.Ref
-	if ref == "" {
-		ref = cfg.Environment.Branch
-	}
 
-	fmt.Fprintf(os.Stdout, "Deploying %s to %s (%s)...\n", cfg.Project.Project.Name, cfg.EnvName, cfg.SSHAddress())
+	fmt.Fprintf(os.Stdout, "Deploying %s to %s (%s, %s build)...\n", cfg.Project.Project.Name, cfg.EnvName, cfg.SSHAddress(), buildMode)
 
-	steps := []struct {
-		name string
-		fn   func(*ssh.Client) error
-	}{
+	steps := []deployStep{
 		{"preflight", func(c *ssh.Client) error { return preflight(c, cfg) }},
-		{"sync", func(c *ssh.Client) error { return syncRepo(c, cfg, ref) }},
-		{"env", func(c *ssh.Client) error { return writeEnvFile(c, cfg) }},
-		{"build", func(c *ssh.Client) error { return buildApp(c, cfg) }},
-		{"activate", func(c *ssh.Client) error { return activateRelease(c, cfg) }},
-		{"permissions", func(c *ssh.Client) error { return enforcePermissions(c, cfg) }},
-		{"restart", func(c *ssh.Client) error { return restartService(c, serviceName) }},
-		{"health", func(c *ssh.Client) error { return healthCheck(c, cfg) }},
 	}
+	if buildMode == config.BuildLocal {
+		// Build before touching the server, so a failed build changes nothing there.
+		var buildDir, builtCommit string
+		steps = append(steps,
+			deployStep{"local preflight", func(c *ssh.Client) error { return localPreflight(c, cfg, opts.AllowNodeMismatch) }},
+			deployStep{"local build", func(*ssh.Client) error {
+				var err error
+				buildDir, builtCommit, err = buildLocally(cfg, ref)
+				return err
+			}},
+			deployStep{"sync", func(c *ssh.Client) error {
+				if err := syncRepo(c, cfg, ref); err != nil {
+					return err
+				}
+				return verifyServerCommit(c, cfg, builtCommit)
+			}},
+			deployStep{"env", func(c *ssh.Client) error { return writeEnvFile(c, cfg) }},
+			deployStep{"upload", func(*ssh.Client) error { return uploadBuild(cfg, buildDir) }},
+		)
+	} else {
+		steps = append(steps,
+			deployStep{"sync", func(c *ssh.Client) error { return syncRepo(c, cfg, ref) }},
+			deployStep{"env", func(c *ssh.Client) error { return writeEnvFile(c, cfg) }},
+			deployStep{"build", func(c *ssh.Client) error { return buildApp(c, cfg) }},
+		)
+	}
+	steps = append(steps, deployStep{"activate", func(c *ssh.Client) error { return activateRelease(c, cfg) }})
+	if cfg.Environment.ReleaseCommand != "" {
+		steps = append(steps, deployStep{"release", func(c *ssh.Client) error { return runReleaseCommand(c, cfg) }})
+	}
+	steps = append(steps,
+		deployStep{"permissions", func(c *ssh.Client) error { return enforcePermissions(c, cfg) }},
+		deployStep{"restart", func(c *ssh.Client) error { return restartService(c, serviceName) }},
+		deployStep{"health", func(c *ssh.Client) error { return healthCheck(c, cfg) }},
+	)
 
 	for _, step := range steps {
 		fmt.Fprintf(os.Stdout, "→ %s\n", step.name)
@@ -155,14 +198,27 @@ func enforcePermissions(client *ssh.Client, cfg *config.ResolvedConfig) error {
 }
 
 func buildApp(client *ssh.Client, cfg *config.ResolvedConfig) error {
-	script := fmt.Sprintf(`
+	_, err := client.RunScript("landfall-build.sh", buildScript(cfg))
+	return err
+}
+
+func buildScript(cfg *config.ResolvedConfig) string {
+	// Tells the app's build that a release_command will run afterwards, so
+	// it can leave release work (e.g. migrations) to that step.
+	releaseFlag := ""
+	if cfg.Environment.ReleaseCommand != "" {
+		releaseFlag = "export LANDFALL_RELEASE=1\n"
+	}
+
+	return fmt.Sprintf(`
 set -euo pipefail
 cd %s
 # Install build tooling (typescript, drizzle-kit, etc.) even when the
 # production env file sets NODE_ENV=production.
 npm ci --include=dev
 export NODE_ENV=production
-# Allow Next/TypeScript builds on small VPS plans (will spill to swap if needed).
+export LANDFALL_BUILD=remote
+%s# Allow Next/TypeScript builds on small VPS plans (will spill to swap if needed).
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1536}"
 if [ -f .env.production ]; then
   set -a
@@ -170,10 +226,29 @@ if [ -f .env.production ]; then
   set +a
 fi
 npm run build
-`, shellQuote(cfg.Environment.Path))
+`, shellQuote(cfg.Environment.Path), releaseFlag)
+}
 
-	_, err := client.RunScript("landfall-build.sh", script)
+// runReleaseCommand runs the environment's release_command on the server with
+// the app's environment loaded. The command comes from the project's own
+// config and is run as shell, like a package.json script.
+func runReleaseCommand(client *ssh.Client, cfg *config.ResolvedConfig) error {
+	_, err := client.RunScript("landfall-release.sh", releaseScript(cfg))
 	return err
+}
+
+func releaseScript(cfg *config.ResolvedConfig) string {
+	return fmt.Sprintf(`
+set -euo pipefail
+cd %s
+export NODE_ENV=production
+if [ -f .env.production ]; then
+  set -a
+  . ./.env.production
+  set +a
+fi
+%s
+`, shellQuote(cfg.Environment.Path), cfg.Environment.ReleaseCommand)
 }
 
 func activateRelease(client *ssh.Client, cfg *config.ResolvedConfig) error {

@@ -464,6 +464,8 @@ Example config: [templates/landfall.toml.example](templates/landfall.toml.exampl
 
 **Required per environment:** `host`, `user`, `path`, `branch`, `port`.
 
+**Optional per environment:** `build` (`"remote"` or `"local"`), `release_command`.
+
 Do **not** commit real project configs into *this* tooling repository — only into your **app** repo. New projects should use `landfall.toml`; existing `vpsdeploy.toml` keeps working.
 
 ---
@@ -485,7 +487,47 @@ sequenceDiagram
     VPS-->>CLI: deploy result
 ```
 
-1. Preflight → 2. Sync git → 3. Write env → 4. Build on VPS → 5. Activate → 6. Restart systemd → 7. Health check  
+1. Preflight → 2. Sync git → 3. Write env → 4. Build on VPS → 5. Activate → 6. Release command (if set) → 7. Restart systemd → 8. Health check  
+
+### Building on your own machine (`build = "local"`)
+
+A small VPS can take many minutes to compile an app and may run out of memory
+doing it. With a local build, Landfall compiles on the machine running the
+CLI and uploads the result:
+
+```toml
+[environments.prod]
+build = "local"                               # or pass --build local
+release_command = "npx drizzle-kit migrate"   # optional; runs on the VPS
+```
+
+1. Preflight → 2. Local preflight → 3. Build locally → 4. Sync git on the VPS → 5. Write env → 6. Upload (rsync) → 7. Activate → 8. Release command → 9. Restart → 10. Health check
+
+What to know:
+
+- **Same platform required.** The build machine must have the same OS and CPU
+  as the VPS (`uname -sm`), and the same Node.js major version. A Node
+  mismatch stops the deploy unless you pass `--allow-node-mismatch`.
+- **It builds the pushed ref, not your working tree.** Landfall keeps a
+  private clone under your user cache directory (`landfall/builds/`), checks
+  out the exact commit, and wipes untracked files before each build, so
+  uncommitted changes and local `.env` files are never uploaded.
+- **The server is untouched until the build succeeds.**
+- **Your build must not need the database.** Environment values are passed to
+  the build, but `127.0.0.1` in a `DATABASE_URL` now means your machine. Put
+  migrations in `release_command`; Landfall sets `LANDFALL_RELEASE=1` during
+  the build (local or remote) whenever a release command is configured, so a
+  build script can skip its own migration step. `LANDFALL_BUILD` is `local`
+  or `remote`.
+- **The upload mirrors the build onto the deploy path** (including
+  `node_modules`, so the release command has its tools). Files on the server
+  that are not part of the build are deleted, except `.git`, `.env*`,
+  `.deploy-meta` and `.next/cache`. The first upload is large; later ones only
+  send what changed.
+- `release_command` is run as shell on the VPS with the app's environment
+  loaded. It comes from your own config, like a `package.json` script.
+
+See [SECURITY.md](SECURITY.md#local-builds) for the trade-offs.
 
 ### VPS layout after bootstrap
 
