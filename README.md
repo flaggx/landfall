@@ -96,7 +96,7 @@ Requires Go 1.22+ (see `go.mod`) and SSH access to an Ubuntu 22.04/24.04 VPS.
 **Recommended** (after a tagged release):
 
 ```bash
-go install github.com/flaggx/landfall/cmd/landfall@v0.1.2
+go install github.com/flaggx/landfall/cmd/landfall@v0.2.0
 ```
 
 Or download a Linux binary from the [GitHub Releases](https://github.com/flaggx/landfall/releases) page.
@@ -390,6 +390,23 @@ REDIS_URL = "{{secret:prod_redis_url}}"
 ```
 
 Redis binds to `127.0.0.1`. Prod DB index `0`, dev `1` by default.
+
+What `redis bootstrap` sets up, and re-checks on every run:
+
+- **A password on Redis's built-in `default` user.** Out of the box it has
+  none, so any process on the VPS could read or flush every environment's
+  data. The password is generated on the server and kept in
+  `/etc/landfall/redis-admin-password` (root only); Landfall's own commands
+  read it through `sudo`. It never leaves the server.
+- **One ACL user per environment** that can use every key and command except
+  the admin ones (`ACL`, `CONFIG`, `SHUTDOWN`, ...).
+- **An `aclfile`** (`/var/lib/redis/users.acl`), so users survive a Redis
+  restart.
+
+Running it again is safe: it only restarts Redis when it had to change the
+config, and it keeps the environment's password unless you pass
+`--reset-password`. Servers set up with Landfall 0.1.x should run it once;
+see the [changelog](CHANGELOG.md).
 
 ---
 

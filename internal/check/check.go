@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/redis"
 	"github.com/flaggx/landfall/internal/security"
 	"github.com/flaggx/landfall/internal/ssh"
 	"github.com/flaggx/landfall/internal/util"
@@ -47,7 +48,7 @@ func (s Summary) AllPassed() bool {
 func Run(cfg *config.ResolvedConfig) (Summary, error) {
 	summary := Summary{}
 
-	required, missing, err := config.CheckSecretsForProject(cfg.ProjectPath)
+	required, missing, err := config.CheckSecretsForEnvironment(cfg.ProjectPath, cfg.EnvName)
 	if err != nil {
 		return summary, err
 	}
@@ -200,11 +201,18 @@ fi
 # Redis
 if [ "%s" = "true" ]; then
   if command -v redis-cli >/dev/null 2>&1 && sudo systemctl is-active redis-server >/dev/null 2>&1 || sudo systemctl is-active redis >/dev/null 2>&1; then
+    REDIS_PORT=%d
+%s
     # ACL GETUSER exits 0 for a missing user, so match the name in ACL USERS.
-    if redis-cli -p %d ACL USERS 2>/dev/null | grep -qxF %s; then
+    if rcli ACL USERS 2>/dev/null | grep -qxF %s; then
       pass redis "ACL user %s (db %d)"
     else
       fail redis "ACL user missing (run: landfall redis bootstrap --reset-password --save-secret, then deploy)"
+    fi
+    if redis-cli -p "$REDIS_PORT" ping 2>/dev/null | grep -qx PONG; then
+      fail redis_default_user "no password: any process on the host can use Redis (run: landfall redis bootstrap)"
+    else
+      pass redis_default_user "password protected"
     fi
   else
     fail redis "not running (run: landfall redis bootstrap)"
@@ -234,7 +242,7 @@ chmod 600 "$RESULT"
 		util.ShellQuote(deployPath), util.ShellQuote(deployPath),
 		serviceName, serviceName,
 		boolString(expectDB), dbName, dbName,
-		boolString(expectRedis), redisPort, util.ShellQuote(redisUser), redisUser, redisDB,
+		boolString(expectRedis), redisPort, redis.CLIPrelude(redis.DefaultPaths), util.ShellQuote(redisUser), redisUser, redisDB,
 		healthURL, healthURL, healthURL, healthURL)
 
 	if _, err := client.RunScript("landfall-check.sh", script); err != nil {

@@ -32,7 +32,7 @@ func TestEncodeRedisURL(t *testing.T) {
 }
 
 func TestBuildBootstrapScript(t *testing.T) {
-	script := buildBootstrapScript("app_prod", 6379, 0, "/tmp/out.env", true)
+	script := buildBootstrapScript(DefaultPaths, "app_prod", 6379, 0, "/tmp/out.env", true)
 	for _, needle := range []string{
 		"REDIS_USER='app_prod'",
 		"REDIS_PORT=6379",
@@ -42,6 +42,8 @@ func TestBuildBootstrapScript(t *testing.T) {
 		"ACL SAVE",
 		"ACL USERS",
 		"aclfile $ACL_FILE",
+		"REDIS_ADMIN_FILE='/etc/landfall/redis-admin-password'",
+		"+@all -@admin",
 		`sudo test -f "$REDIS_CONF"`,
 		"RESULT='/tmp/out.env'",
 	} {
@@ -60,7 +62,7 @@ func TestBuildBootstrapScriptIsValidBash(t *testing.T) {
 	if err != nil {
 		t.Skip("bash not available")
 	}
-	script := buildBootstrapScript("app_prod", 6379, 0, "/tmp/out.env", false)
+	script := buildBootstrapScript(DefaultPaths, "app_prod", 6379, 0, "/tmp/out.env", false)
 	cmd := exec.Command(bash, "-n")
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {

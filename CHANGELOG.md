@@ -5,7 +5,17 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-13
+
+### Upgrading from 0.1.x
+
+Run `landfall redis bootstrap --env <env>` once per server that uses Redis.
+It adds an `aclfile`, puts a password on Redis's `default` user and removes
+admin commands from the environment's user, without changing the
+environment's password. If `landfall check` then reports the ACL user as
+missing (0.1.x lost it at the first Redis restart and could not tell), run
+`landfall redis bootstrap --env <env> --reset-password --save-secret` and
+deploy.
 
 ### Added
 
@@ -16,9 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `release_command`: a per-environment command run on the VPS after the build
   is in place and before the restart, for migrations. `LANDFALL_RELEASE=1` and
   `LANDFALL_BUILD` are exported to the build.
+- `redis status` and `check` report whether Redis's `default` user is
+  password protected and whether ACL users are persisted.
 
 ### Security
 
+- Redis's built-in `default` user had no password, so any process on the VPS
+  could use Redis as an administrator. `redis bootstrap` now sets one, stored
+  on the server in `/etc/landfall/redis-admin-password` (root only).
+- Environment ACL users no longer get admin commands (`+@all -@admin`).
+- Redis passwords are sent to `redis-cli` on stdin or through the
+  environment instead of on the command line, where other users on the host
+  could see them in the process list.
+- Database dumps were written to a predictable, world-readable file in `/tmp`
+  before being moved into the backup directory. They are now streamed
+  straight into the root-only directory.
+- The scheduled-backup installer wrote the S3 keys through an unquoted
+  heredoc, so a key containing `$` or a backtick would have been expanded or
+  executed. The backup script is now installed through a quoted heredoc.
 - Git refs passed to `deploy --ref` are validated, so a value starting with
   `-` can no longer be read by git as an option.
 
@@ -32,8 +57,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ACL GETUSER`, which exits 0 for a user that does not exist, so a missing
   user was always reported as present. They now match the name in
   `ACL USERS`.
-- `redis bootstrap` restarted Redis on every run; it now restarts only when
-  it changed the config.
+- `redis bootstrap` tested for `redis.conf` without sudo, which always failed
+  because `/etc/redis` is private to the redis user, so its config step never
+  ran. It also restarted Redis on every run; it now restarts only when it
+  changed the config.
+- `db backup` reported failure after writing the dump, `db backups` always
+  listed none, and `db restore` and `db backup --upload` could not read the
+  dump, all because the backup directory is root-only. `db schedule --upload`
+  failed while installing its script.
+- `check --env <env>` failed on secrets that only other environments use.
+
+### Changed
+
+- `bootstrap` installs Node.js 22 instead of 20, which reached end of life in
+  April 2026. Re-running `bootstrap` on an existing server upgrades Node.
 
 ## [0.1.2] - 2026-08-26
 
@@ -90,6 +127,7 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
+[0.2.0]: https://github.com/flaggx/landfall/releases/tag/v0.2.0
 [0.1.2]: https://github.com/flaggx/landfall/releases/tag/v0.1.2
 [0.1.1]: https://github.com/flaggx/landfall/releases/tag/v0.1.1
 [0.1.0]: https://github.com/flaggx/landfall/releases/tag/v0.1.0

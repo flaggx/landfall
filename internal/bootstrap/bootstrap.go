@@ -76,8 +76,9 @@ if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y -qq git curl ca-certificates build-essential
 fi
 
-if ! command -v node >/dev/null 2>&1 || ! node --version | grep -qE '^v20\.'; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Node.js 22 LTS. Node 20 reached end of life in April 2026.
+if ! command -v node >/dev/null 2>&1 || ! node --version | grep -qE '^v22\.'; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
   sudo apt-get install -y -qq nodejs
 fi
 

@@ -56,3 +56,16 @@ scripts run on your machine with your user's access (SSH keys, other
 projects, the secrets file) instead of on the VPS. Build remotely, or in a
 dedicated machine or container, if you do not trust a project's dependencies
 with that.
+
+## Known limitations
+
+- **The deploy user has passwordless sudo.** Setup gives the SSH user
+  `NOPASSWD: ALL`, and the app's systemd service runs as that same user, so a
+  compromise of the app is a compromise of the server. Narrowing this to the
+  commands Landfall needs, or running the app as a separate unprivileged
+  user, is planned.
+- **Redis isolates environments by ACL user, not by database.** Each
+  environment's user can reach every database index on the instance.
+- **Scheduled S3 uploads store the bucket keys on the server**, in the
+  root-only backup script under `/usr/local/bin`.
+

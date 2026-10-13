@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/BurntSushi/toml"
 )
@@ -149,6 +150,16 @@ func CollectSecretRefs(cfg ProjectConfig) []string {
 }
 
 func CheckSecretsForProject(projectDir string) ([]string, []string, error) {
+	return checkSecrets(projectDir, "")
+}
+
+// CheckSecretsForEnvironment is like CheckSecretsForProject but only counts
+// the secrets that one environment references.
+func CheckSecretsForEnvironment(projectDir, envName string) ([]string, []string, error) {
+	return checkSecrets(projectDir, envName)
+}
+
+func checkSecrets(projectDir, envName string) ([]string, []string, error) {
 	configPath, err := FindProjectConfig(projectDir)
 	if err != nil {
 		return nil, nil, err
@@ -159,7 +170,16 @@ func CheckSecretsForProject(projectDir string) ([]string, []string, error) {
 		return nil, nil, err
 	}
 
+	if envName != "" {
+		env, ok := projectCfg.Environments[envName]
+		if !ok {
+			return nil, nil, fmt.Errorf("environment %q not found", envName)
+		}
+		projectCfg.Environments = map[string]Environment{envName: env}
+	}
+
 	required := CollectSecretRefs(projectCfg)
+	sort.Strings(required)
 	secretsCfg, err := LoadSecrets()
 	if err != nil {
 		return required, nil, err

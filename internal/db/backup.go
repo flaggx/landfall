@@ -50,14 +50,16 @@ sudo mkdir -p "$DIR"
 sudo chown root:root "$DIR"
 sudo chmod 750 "$DIR"
 
-sudo -u postgres pg_dump -Fc -d "$DB" -f "/tmp/landfall-pg.dump"
-sudo mv /tmp/landfall-pg.dump "$FILE"
+# Stream the dump straight into the root-only backup directory; a temp file
+# in /tmp would be readable by every user on the host while it is written.
+sudo -u postgres pg_dump -Fc -d "$DB" | sudo tee "$FILE" >/dev/null
 sudo chmod 640 "$FILE"
+sudo test -s "$FILE"
 
 # Prune old dumps
 sudo find "$DIR" -type f -name '*.dump' -mtime +"$RETAIN_DAYS" -delete
 
-ls -lh "$FILE"
+sudo ls -lh "$FILE"
 echo "BACKUP_PATH=$FILE"
 `, util.ShellQuote(dir), util.ShellQuote(remotePath), util.ShellQuote(dbName), retain)
 
@@ -90,7 +92,7 @@ set -euo pipefail
 DIR=%s
 echo "Local backups in $DIR:"
 if [ -d "$DIR" ]; then
-  sudo ls -lh "$DIR"/*.dump 2>/dev/null || echo "  (none)"
+  sudo sh -c 'ls -lh "$1"/*.dump' _ "$DIR" 2>/dev/null || echo "  (none)"
 else
   echo "  (directory missing — run: landfall db backup)"
 fi
@@ -126,14 +128,15 @@ set -euo pipefail
 FILE=%s
 DB=%s
 
-if [ ! -f "$FILE" ]; then
+if ! sudo test -f "$FILE"; then
   echo "Backup file not found: $FILE" >&2
   exit 1
 fi
 
 # Terminate open sessions then restore into existing DB
 sudo -u postgres psql -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB}' AND pid <> pg_backend_pid();" || true
-sudo -u postgres pg_restore --clean --if-exists -d "$DB" "$FILE"
+# The backup directory is root-only, so feed the dump to pg_restore on stdin.
+sudo cat "$FILE" | sudo -u postgres pg_restore --clean --if-exists -d "$DB"
 echo "Restore finished."
 `, util.ShellQuote(file), util.ShellQuote(dbName))
 
@@ -167,54 +170,40 @@ func Schedule(cfg *config.ResolvedConfig, opts ScheduleOptions) error {
 }
 
 func buildScheduleScript(cfg *config.ResolvedConfig, unit, dir, dbName string, retain, hour int, upload bool) string {
-	uploadSnippet := "true"
+	uploadSnippet := ""
 	if upload && cfg.PostgresBackupS3Configured() {
 		endpoint, bucket, prefix, region, accessKey, secretKey, err := s3Settings(cfg)
 		if err == nil {
-			destPrefix := strings.Trim(prefix, "/")
+			dest := fmt.Sprintf("s3://%s/%s", bucket, strings.Trim(prefix, "/"))
 			uploadSnippet = fmt.Sprintf(`
 export AWS_ACCESS_KEY_ID=%s
 export AWS_SECRET_ACCESS_KEY=%s
 export AWS_DEFAULT_REGION=%s
+DEST=%s
 if ! command -v aws >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq awscli || true
 fi
 if command -v aws >/dev/null 2>&1; then
-  aws s3 cp "$FILE" "s3://%s/%s/$(basename "$FILE")" --endpoint-url %s
+  aws s3 cp "$FILE" "$DEST/$(basename "$FILE")" --endpoint-url %s
 fi
 `, util.ShellQuote(accessKey), util.ShellQuote(secretKey), util.ShellQuote(region),
-				bucket, destPrefix, util.ShellQuote(endpoint))
+				util.ShellQuote(dest), util.ShellQuote(endpoint))
 		}
 	}
 
+	// The backup script is written through a quoted heredoc, so nothing in it
+	// (including the S3 keys) is expanded or executed while it is installed.
 	return fmt.Sprintf(`
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 UNIT=%s
-DIR=%s
-DB=%s
-RETAIN_DAYS=%d
 HOUR=%d
 
-sudo tee /usr/local/bin/${UNIT}.sh >/dev/null <<EOF
-#!/bin/bash
-set -euo pipefail
-DIR=${DIR}
-DB=${DB}
-RETAIN_DAYS=${RETAIN_DAYS}
-STAMP=\$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
-FILE="\$DIR/\${DB}_\${STAMP}.dump"
-mkdir -p "\$DIR"
-chmod 750 "\$DIR"
-sudo -u postgres pg_dump -Fc -d "\$DB" -f /tmp/landfall-pg.dump
-mv /tmp/landfall-pg.dump "\$FILE"
-chmod 640 "\$FILE"
-find "\$DIR" -type f -name '*.dump' -mtime +"\$RETAIN_DAYS" -delete
-%s
-EOF
+sudo tee /usr/local/bin/${UNIT}.sh >/dev/null <<'LANDFALL_BACKUP_SCRIPT'
+%sLANDFALL_BACKUP_SCRIPT
 sudo chmod 750 /usr/local/bin/${UNIT}.sh
 
-sudo tee /etc/systemd/system/${UNIT}.service >/dev/null <<EOF
+sudo tee /etc/systemd/system/${UNIT}.service >/dev/null <<UNIT_FILE
 [Unit]
 Description=landfall PostgreSQL backup (${UNIT})
 After=postgresql.service
@@ -222,9 +211,9 @@ After=postgresql.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/${UNIT}.sh
-EOF
+UNIT_FILE
 
-sudo tee /etc/systemd/system/${UNIT}.timer >/dev/null <<EOF
+sudo tee /etc/systemd/system/${UNIT}.timer >/dev/null <<UNIT_FILE
 [Unit]
 Description=Daily landfall PostgreSQL backup (${UNIT})
 
@@ -235,13 +224,33 @@ Unit=${UNIT}.service
 
 [Install]
 WantedBy=timers.target
-EOF
+UNIT_FILE
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now ${UNIT}.timer
 sudo systemctl list-timers ${UNIT}.timer --no-pager || true
 echo "Scheduled ${UNIT}.timer at ${HOUR}:00 UTC"
-`, util.ShellQuote(unit), util.ShellQuote(dir), util.ShellQuote(dbName), retain, hour, uploadSnippet)
+`, util.ShellQuote(unit), hour, scheduledBackupScript(dir, dbName, retain, uploadSnippet))
+}
+
+// scheduledBackupScript is the script the systemd timer runs as root.
+func scheduledBackupScript(dir, dbName string, retain int, uploadSnippet string) string {
+	return fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+DIR=%s
+DB=%s
+RETAIN_DAYS=%d
+STAMP=$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
+FILE="$DIR/${DB}_${STAMP}.dump"
+mkdir -p "$DIR"
+chmod 750 "$DIR"
+# Write the dump straight into the root-only directory (no temp file in /tmp).
+umask 027
+sudo -u postgres pg_dump -Fc -d "$DB" > "$FILE"
+chmod 640 "$FILE"
+test -s "$FILE"
+find "$DIR" -type f -name '*.dump' -mtime +"$RETAIN_DAYS" -delete
+%s`, util.ShellQuote(dir), util.ShellQuote(dbName), retain, uploadSnippet)
 }
 
 func uploadBackup(cfg *config.ResolvedConfig, remoteFile string) error {
@@ -270,7 +279,7 @@ fi
 export AWS_ACCESS_KEY_ID=%s
 export AWS_SECRET_ACCESS_KEY=%s
 export AWS_DEFAULT_REGION=%s
-aws s3 cp "$FILE" "s3://%s/%s" --endpoint-url %s
+sudo cat "$FILE" | aws s3 cp - "s3://%s/%s" --endpoint-url %s
 `, util.ShellQuote(remoteFile), util.ShellQuote(accessKey), util.ShellQuote(secretKey),
 		util.ShellQuote(region), bucket, destKey, util.ShellQuote(endpoint))
 

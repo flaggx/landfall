@@ -2,6 +2,7 @@ package db
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -90,6 +91,51 @@ func TestBuildScheduleScript(t *testing.T) {
 		if !strings.Contains(script, needle) {
 			t.Fatalf("missing %q", needle)
 		}
+	}
+}
+
+func TestScheduledBackupScript(t *testing.T) {
+	// A secret full of shell syntax must survive installation untouched.
+	upload := "\nexport AWS_SECRET_ACCESS_KEY='k$(touch /tmp/landfall-pwned)`id`'\naws s3 cp \"$FILE\" \"$DEST/$(basename \"$FILE\")\"\n"
+	inner := scheduledBackupScript("/var/backups/landfall/prod", "my_webapp_prod", 7, upload)
+	for _, needle := range []string{
+		"DIR='/var/backups/landfall/prod'",
+		"DB='my_webapp_prod'",
+		`pg_dump -Fc -d "$DB" > "$FILE"`,
+		"umask 027",
+	} {
+		if !strings.Contains(inner, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, inner)
+		}
+	}
+	if strings.Contains(inner, "/tmp/landfall-pg.dump") {
+		t.Fatalf("backup script must not use a shared temp file:\n%s", inner)
+	}
+
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	check := exec.Command(bash, "-n")
+	check.Stdin = strings.NewReader(inner)
+	if out, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n failed: %v\n%s", err, out)
+	}
+
+	cfg := testCfg(t, false)
+	outer := buildScheduleScript(cfg, "unit", "/var/backups/landfall/prod", "my_webapp_prod", 7, 3, false)
+	if !strings.Contains(outer, "<<'LANDFALL_BACKUP_SCRIPT'") {
+		t.Fatalf("installer must write the backup script through a quoted heredoc:\n%s", outer)
+	}
+
+	// The quoted heredoc must reproduce the script byte for byte.
+	heredoc := "cat <<'LANDFALL_BACKUP_SCRIPT'\n" + inner + "LANDFALL_BACKUP_SCRIPT\n"
+	out, err := exec.Command(bash, "-c", heredoc).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != inner {
+		t.Fatalf("heredoc changed the script:\n--- want\n%s\n--- got\n%s", inner, out)
 	}
 }
 
