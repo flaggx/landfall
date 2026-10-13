@@ -184,8 +184,12 @@ func TestBootstrapAgainstRealRedis(t *testing.T) {
 		t.Fatalf("app user cannot write: %q", got)
 	}
 	// What client libraries send while connecting must still be allowed.
-	if got := s.cli("-u", url, "CLIENT", "SETINFO", "lib-name", "landfall-test"); got != "OK" {
-		t.Fatalf("app user cannot run CLIENT SETINFO: %q", got)
+	// (CLIENT SETINFO only exists from Redis 7.2, so just rule out a permission error.)
+	if got := s.cli("-u", url, "CLIENT", "SETNAME", "landfall-test"); got != "OK" {
+		t.Fatalf("app user cannot run CLIENT SETNAME: %q", got)
+	}
+	if got := s.cli("-u", url, "CLIENT", "SETINFO", "lib-name", "landfall-test"); strings.Contains(got, "NOPERM") {
+		t.Fatalf("app user must be allowed to run CLIENT SETINFO: %q", got)
 	}
 	for _, admin := range [][]string{{"ACL", "LIST"}, {"CONFIG", "GET", "aclfile"}, {"ACL", "SETUSER", "default", "nopass"}} {
 		if got := s.cli(append([]string{"-u", url}, admin...)...); !strings.Contains(got, "NOPERM") {
