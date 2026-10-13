@@ -200,10 +200,11 @@ fi
 # Redis
 if [ "%s" = "true" ]; then
   if command -v redis-cli >/dev/null 2>&1 && sudo systemctl is-active redis-server >/dev/null 2>&1 || sudo systemctl is-active redis >/dev/null 2>&1; then
-    if redis-cli -p %d ACL GETUSER %s >/dev/null 2>&1; then
+    # ACL GETUSER exits 0 for a missing user, so match the name in ACL USERS.
+    if redis-cli -p %d ACL USERS 2>/dev/null | grep -qxF %s; then
       pass redis "ACL user %s (db %d)"
     else
-      fail redis "ACL user missing (run: landfall redis bootstrap)"
+      fail redis "ACL user missing (run: landfall redis bootstrap --reset-password --save-secret, then deploy)"
     fi
   else
     fail redis "not running (run: landfall redis bootstrap)"
@@ -233,7 +234,7 @@ chmod 600 "$RESULT"
 		util.ShellQuote(deployPath), util.ShellQuote(deployPath),
 		serviceName, serviceName,
 		boolString(expectDB), dbName, dbName,
-		boolString(expectRedis), redisPort, redisUser, redisUser, redisDB,
+		boolString(expectRedis), redisPort, util.ShellQuote(redisUser), redisUser, redisDB,
 		healthURL, healthURL, healthURL, healthURL)
 
 	if _, err := client.RunScript("landfall-check.sh", script); err != nil {

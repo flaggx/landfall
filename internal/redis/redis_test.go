@@ -2,6 +2,7 @@ package redis
 
 import (
 	"net/url"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -39,10 +40,29 @@ func TestBuildBootstrapScript(t *testing.T) {
 		"RESET_PASSWORD='true'",
 		"ACL SETUSER",
 		"ACL SAVE",
+		"ACL USERS",
+		"aclfile $ACL_FILE",
 		"RESULT='/tmp/out.env'",
 	} {
 		if !strings.Contains(script, needle) {
 			t.Fatalf("script missing %q\n%s", needle, script)
 		}
+	}
+	// ACL GETUSER exits 0 for a missing user, so it must not be the existence check.
+	if strings.Contains(script, `"$REDIS_PORT" ACL GETUSER`) {
+		t.Fatalf("script must not use ACL GETUSER to test for a user\n%s", script)
+	}
+}
+
+func TestBuildBootstrapScriptIsValidBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	script := buildBootstrapScript("app_prod", 6379, 0, "/tmp/out.env", false)
+	cmd := exec.Command(bash, "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n failed: %v\n%s", err, out)
 	}
 }

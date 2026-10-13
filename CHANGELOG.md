@@ -5,6 +5,21 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Redis ACL users were never persisted: `redis bootstrap` ran `ACL SAVE`
+  without an `aclfile` configured and ignored the failure, so the app's user
+  vanished at the next Redis restart. Bootstrap now sets
+  `aclfile /var/lib/redis/users.acl` and fails if the save does not succeed.
+- `redis bootstrap`, `redis status` and `check` tested for the ACL user with
+  `ACL GETUSER`, which exits 0 for a user that does not exist, so a missing
+  user was always reported as present. They now match the name in
+  `ACL USERS`.
+- `redis bootstrap` restarted Redis on every run; it now restarts only when
+  it changed the config.
+
 ## [0.1.2] - 2026-08-26
 
 ### Security

@@ -138,11 +138,14 @@ if command -v redis-cli >/dev/null 2>&1; then
   redis-cli -p %d ping || true
   echo ""
   echo "ACL user exists:"
-  redis-cli -p %d ACL GETUSER %s >/dev/null 2>&1 && echo "  yes" || echo "  no"
+  redis-cli -p %d ACL USERS 2>/dev/null | grep -qxF %s && echo "  yes" || echo "  no (run: landfall redis bootstrap --reset-password --save-secret, then deploy)"
+  echo ""
+  echo "ACL users persisted (aclfile):"
+  redis-cli -p %d CONFIG GET aclfile 2>/dev/null | sed -n '2p' | grep -q . && echo "  yes" || echo "  no (users are lost when Redis restarts; run: landfall redis bootstrap)"
 else
   echo "Redis is not installed."
 fi
-`, redisUser, redisDB, redisPort, redisPort, redisPort, redisUser)
+`, redisUser, redisDB, redisPort, redisPort, redisPort, util.ShellQuote(redisUser), redisPort)
 
 	_, err = client.RunScript("landfall-redis-status.sh", script)
 	return err
@@ -181,19 +184,44 @@ fi
 sudo systemctl enable redis-server 2>/dev/null || sudo systemctl enable redis 2>/dev/null || true
 sudo systemctl start redis-server 2>/dev/null || sudo systemctl start redis 2>/dev/null
 
-# Ensure Redis only listens locally
+# Ensure Redis only listens locally and keeps ACL users in a file. Without an
+# aclfile, ACL SAVE fails and users created below vanish when Redis restarts.
 REDIS_CONF="/etc/redis/redis.conf"
+ACL_FILE="/var/lib/redis/users.acl"
 if [ -f "$REDIS_CONF" ]; then
-  if grep -q '^bind ' "$REDIS_CONF"; then
-    sudo sed -i 's/^bind .*/bind 127.0.0.1 ::1/' "$REDIS_CONF"
-  else
-    echo 'bind 127.0.0.1 ::1' | sudo tee -a "$REDIS_CONF" >/dev/null
+  CONF_CHANGED=false
+  if ! sudo grep -qx 'bind 127.0.0.1 ::1' "$REDIS_CONF"; then
+    if sudo grep -q '^bind ' "$REDIS_CONF"; then
+      sudo sed -i 's/^bind .*/bind 127.0.0.1 ::1/' "$REDIS_CONF"
+    else
+      echo 'bind 127.0.0.1 ::1' | sudo tee -a "$REDIS_CONF" >/dev/null
+    fi
+    CONF_CHANGED=true
   fi
-  sudo systemctl restart redis-server 2>/dev/null || sudo systemctl restart redis 2>/dev/null || true
+  if sudo grep -q '^user ' "$REDIS_CONF"; then
+    # Redis refuses to start with both inline users and an aclfile.
+    echo "redis.conf defines users inline; leaving aclfile unset" >&2
+  elif ! sudo grep -q '^aclfile ' "$REDIS_CONF"; then
+    sudo touch "$ACL_FILE"
+    sudo chown redis:redis "$ACL_FILE"
+    sudo chmod 640 "$ACL_FILE"
+    echo "aclfile $ACL_FILE" | sudo tee -a "$REDIS_CONF" >/dev/null
+    CONF_CHANGED=true
+  fi
+  # Restarting drops any ACL users that were never saved, so only restart
+  # when the config actually changed.
+  if [ "$CONF_CHANGED" = true ]; then
+    sudo systemctl restart redis-server 2>/dev/null || sudo systemctl restart redis 2>/dev/null
+    for _ in $(seq 1 20); do
+      redis-cli -p "$REDIS_PORT" ping >/dev/null 2>&1 && break
+      sleep 0.5
+    done
+  fi
 fi
 
+# ACL GETUSER exits 0 for a user that doesn't exist, so list the names instead.
 USER_EXISTS=false
-if redis-cli -p "$REDIS_PORT" ACL GETUSER "$REDIS_USER" >/dev/null 2>&1; then
+if redis-cli -p "$REDIS_PORT" ACL USERS 2>/dev/null | grep -qxF "$REDIS_USER"; then
   USER_EXISTS=true
 fi
 
@@ -210,7 +238,10 @@ elif [ "$RESET_PASSWORD" = true ]; then
 fi
 
 if [ "$CREATED" = true ] || [ "$PASSWORD_ROTATED" = true ]; then
-  redis-cli -p "$REDIS_PORT" ACL SAVE >/dev/null 2>&1 || true
+  if ! redis-cli -p "$REDIS_PORT" ACL SAVE | grep -qx OK; then
+    echo "ACL SAVE failed: the Redis user will be lost when Redis restarts (is aclfile set in $REDIS_CONF?)" >&2
+    exit 1
+  fi
 fi
 
 {
