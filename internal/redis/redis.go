@@ -188,13 +188,16 @@ sudo systemctl start redis-server 2>/dev/null || sudo systemctl start redis 2>/d
 # aclfile, ACL SAVE fails and users created below vanish when Redis restarts.
 REDIS_CONF="/etc/redis/redis.conf"
 ACL_FILE="/var/lib/redis/users.acl"
-if [ -f "$REDIS_CONF" ]; then
+# /etc/redis is readable only by the redis user, so test with sudo.
+if sudo test -f "$REDIS_CONF"; then
   CONF_CHANGED=false
-  if ! sudo grep -qx 'bind 127.0.0.1 ::1' "$REDIS_CONF"; then
+  # Leave a bind line alone if it already lists only loopback addresses
+  # (the package default is "bind 127.0.0.1 -::1").
+  if ! sudo grep -qE '^bind( -?(127\.0\.0\.1|::1))+[[:space:]]*$' "$REDIS_CONF"; then
     if sudo grep -q '^bind ' "$REDIS_CONF"; then
-      sudo sed -i 's/^bind .*/bind 127.0.0.1 ::1/' "$REDIS_CONF"
+      sudo sed -i 's/^bind .*/bind 127.0.0.1 -::1/' "$REDIS_CONF"
     else
-      echo 'bind 127.0.0.1 ::1' | sudo tee -a "$REDIS_CONF" >/dev/null
+      echo 'bind 127.0.0.1 -::1' | sudo tee -a "$REDIS_CONF" >/dev/null
     fi
     CONF_CHANGED=true
   fi
@@ -217,6 +220,9 @@ if [ -f "$REDIS_CONF" ]; then
       sleep 0.5
     done
   fi
+else
+  echo "Redis config not found at $REDIS_CONF; cannot set up an aclfile" >&2
+  exit 1
 fi
 
 # ACL GETUSER exits 0 for a user that doesn't exist, so list the names instead.

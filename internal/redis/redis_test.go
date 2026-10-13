@@ -42,6 +42,7 @@ func TestBuildBootstrapScript(t *testing.T) {
 		"ACL SAVE",
 		"ACL USERS",
 		"aclfile $ACL_FILE",
+		`sudo test -f "$REDIS_CONF"`,
 		"RESULT='/tmp/out.env'",
 	} {
 		if !strings.Contains(script, needle) {
