@@ -194,12 +194,12 @@ func (c *Client) UploadFile(remotePath string, content []byte, mode os.FileMode)
 	go func() {
 		w, _ := session.StdinPipe()
 		defer w.Close()
-		fmt.Fprintf(w, "C0644 %d %s\n", len(content), filepath.Base(remotePath))
+		fmt.Fprint(w, scpHeader(mode, len(content), remotePath))
 		w.Write(content)
 		fmt.Fprint(w, "\x00")
 	}()
 
-	cmd := fmt.Sprintf("scp -t %s", filepath.Dir(remotePath))
+	cmd := fmt.Sprintf("scp -t %s", shellQuote(filepath.Dir(remotePath)))
 	if err := session.Start(cmd); err != nil {
 		return fmt.Errorf("start scp upload: %w", err)
 	}
@@ -214,12 +214,21 @@ func (c *Client) UploadFile(remotePath string, content []byte, mode os.FileMode)
 	}
 	defer chmodSession.Close()
 
-	chmodCmd := fmt.Sprintf("chmod %o %s", mode, remotePath)
+	// scp only applies the header mode to files it creates, so enforce it
+	// on files that already existed.
+	chmodCmd := fmt.Sprintf("chmod %o %s", mode.Perm(), shellQuote(remotePath))
 	if err := chmodSession.Run(chmodCmd); err != nil {
 		return fmt.Errorf("chmod remote file: %w", err)
 	}
 
 	return nil
+}
+
+// scpHeader builds the scp protocol line announcing a file. The mode is sent
+// here so the remote file is created with its final permissions and secrets
+// are never readable by other users, even briefly.
+func scpHeader(mode os.FileMode, size int, remotePath string) string {
+	return fmt.Sprintf("C%04o %d %s\n", mode.Perm(), size, filepath.Base(remotePath))
 }
 
 func (c *Client) ReadFile(remotePath string) ([]byte, error) {
