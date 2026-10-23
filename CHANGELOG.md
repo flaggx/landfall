@@ -5,6 +5,21 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-23
+
+### Added
+
+- `landfall db schedule --ping-url <url>`: the scheduled backup requests the
+  URL after each successful run and `<url>/fail` when any step fails, for a
+  dead man's switch such as Healthchecks.io.
+
+### Fixed
+
+- `db schedule --upload` without S3 settings now fails instead of installing
+  a backup that never uploads.
+- A scheduled `--upload` backup now fails when the `aws` CLI is missing and
+  can't be installed, instead of finishing as if the dump had been uploaded.
+
 ## [0.3.1] - 2026-10-23
 
 ### Fixed
@@ -174,6 +189,7 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
+[0.4.0]: https://github.com/flaggx/landfall/releases/tag/v0.4.0
 [0.3.1]: https://github.com/flaggx/landfall/releases/tag/v0.3.1
 [0.3.0]: https://github.com/flaggx/landfall/releases/tag/v0.3.0
 [0.2.0]: https://github.com/flaggx/landfall/releases/tag/v0.2.0

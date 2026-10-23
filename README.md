@@ -435,6 +435,19 @@ backup_s3_region = "auto"
 
 And secrets: `backup_s3_access_key`, `backup_s3_secret_key`. Verify a manual `--upload` before depending on scheduled off-site copies.
 
+**Know when a backup didn't happen.** A timer that stops firing, or a dump
+or upload that fails, is silent by default. Pass a dead man's switch URL
+(for example a [Healthchecks.io](https://healthchecks.io) check with a one-day
+period) and the backup script requests it after every successful run, or
+`<url>/fail` when any step fails, so the service alerts you either way:
+
+```bash
+landfall db schedule --env prod --upload --ping-url https://hc-ping.com/<uuid>
+```
+
+Re-running `db schedule` rewrites the script, so pass `--ping-url` (and
+`--upload`) every time.
+
 ### Scale ladder (self-hosted “managed” feel)
 
 1. **Vertical** — resize the VPS  

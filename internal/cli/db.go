@@ -13,6 +13,7 @@ var (
 	restoreYes      bool
 	scheduleUpload  bool
 	scheduleHour    int
+	schedulePingURL string
 	replicaHost     string
 	poolerPort      int
 )
@@ -138,14 +139,16 @@ func newDBScheduleCmd() *cobra.Command {
 				return err
 			}
 			return db.Schedule(cfg, db.ScheduleOptions{
-				Upload: scheduleUpload,
-				Hour:   scheduleHour,
+				Upload:  scheduleUpload,
+				Hour:    scheduleHour,
+				PingURL: schedulePingURL,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&envName, "env", "prod", "Environment name from landfall.toml")
 	cmd.Flags().BoolVar(&scheduleUpload, "upload", false, "Also upload each scheduled dump to S3-compatible storage")
 	cmd.Flags().IntVar(&scheduleHour, "hour", 3, "UTC hour for daily backup (0-23)")
+	cmd.Flags().StringVar(&schedulePingURL, "ping-url", "", "Healthchecks.io-style URL to request after each successful backup (and <url>/fail on failure)")
 	return cmd
 }
 

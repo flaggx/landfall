@@ -17,6 +17,9 @@ type BackupOptions struct {
 type ScheduleOptions struct {
 	Upload bool
 	Hour   int // UTC hour 0-23, default 3
+	// PingURL is an optional dead-man's-switch URL (e.g. Healthchecks.io):
+	// requested after each successful backup, and at PingURL/fail when one fails.
+	PingURL string
 }
 
 func Backup(cfg *config.ResolvedConfig, opts BackupOptions) error {
@@ -163,17 +166,44 @@ func Schedule(cfg *config.ResolvedConfig, opts ScheduleOptions) error {
 		return err
 	}
 	retain := cfg.PostgresBackupRetainDays()
+	if err := validatePingURL(opts.PingURL); err != nil {
+		return err
+	}
 
-	script := buildScheduleScript(cfg, unit, dir, dbName, retain, hour, opts.Upload)
+	script, err := buildScheduleScript(cfg, unit, dir, dbName, retain, hour, opts.Upload, opts.PingURL)
+	if err != nil {
+		return err
+	}
 	_, err = client.RunScript("landfall-db-schedule.sh", script)
 	return err
 }
 
-func buildScheduleScript(cfg *config.ResolvedConfig, unit, dir, dbName string, retain, hour int, upload bool) string {
+// validatePingURL accepts only plain http(s) URLs, since the URL ends up in a
+// root-run shell script.
+func validatePingURL(pingURL string) error {
+	if pingURL == "" {
+		return nil
+	}
+	if !strings.HasPrefix(pingURL, "https://") && !strings.HasPrefix(pingURL, "http://") {
+		return fmt.Errorf("--ping-url must be an http(s) URL, got %q", pingURL)
+	}
+	if strings.ContainsAny(pingURL, " '\"\\`$\n") {
+		return fmt.Errorf("--ping-url contains characters that are not allowed: %q", pingURL)
+	}
+	return nil
+}
+
+func buildScheduleScript(cfg *config.ResolvedConfig, unit, dir, dbName string, retain, hour int, upload bool, pingURL string) (string, error) {
 	uploadSnippet := ""
-	if upload && cfg.PostgresBackupS3Configured() {
+	if upload {
+		if !cfg.PostgresBackupS3Configured() {
+			return "", fmt.Errorf("--upload needs S3 settings for this environment (see the README, \"Backups\")")
+		}
 		endpoint, bucket, prefix, region, accessKey, secretKey, err := s3Settings(cfg)
-		if err == nil {
+		if err != nil {
+			return "", err
+		}
+		{
 			dest := fmt.Sprintf("s3://%s/%s", bucket, strings.Trim(prefix, "/"))
 			uploadSnippet = fmt.Sprintf(`
 export AWS_ACCESS_KEY_ID=%s
@@ -183,9 +213,11 @@ DEST=%s
 if ! command -v aws >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq awscli || true
 fi
-if command -v aws >/dev/null 2>&1; then
-  aws s3 cp "$FILE" "$DEST/$(basename "$FILE")" --endpoint-url %s
+if ! command -v aws >/dev/null 2>&1; then
+  echo "aws CLI is missing, so the dump was not uploaded" >&2
+  exit 1
 fi
+aws s3 cp "$FILE" "$DEST/$(basename "$FILE")" --endpoint-url %s
 `, util.ShellQuote(accessKey), util.ShellQuote(secretKey), util.ShellQuote(region),
 				util.ShellQuote(dest), util.ShellQuote(endpoint))
 		}
@@ -230,14 +262,21 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ${UNIT}.timer
 sudo systemctl list-timers ${UNIT}.timer --no-pager || true
 echo "Scheduled ${UNIT}.timer at ${HOUR}:00 UTC"
-`, util.ShellQuote(unit), hour, scheduledBackupScript(dir, dbName, retain, uploadSnippet))
+`, util.ShellQuote(unit), hour, scheduledBackupScript(dir, dbName, retain, uploadSnippet, pingURL)), nil
 }
 
 // scheduledBackupScript is the script the systemd timer runs as root.
-func scheduledBackupScript(dir, dbName string, retain int, uploadSnippet string) string {
+func scheduledBackupScript(dir, dbName string, retain int, uploadSnippet, pingURL string) string {
+	pingStart, pingEnd := "", ""
+	if pingURL != "" {
+		// Any failure (set -e) pings /fail; the success ping is the last line,
+		// so it only goes out once the dump (and upload) really happened.
+		pingStart = fmt.Sprintf("PING_URL=%s\ntrap 'curl -fsS -m 10 --retry 3 \"$PING_URL/fail\" >/dev/null 2>&1 || true' ERR\n", util.ShellQuote(pingURL))
+		pingEnd = "curl -fsS -m 10 --retry 3 \"$PING_URL\" >/dev/null 2>&1 || true\n"
+	}
 	return fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
-DIR=%s
+%sDIR=%s
 DB=%s
 RETAIN_DAYS=%d
 STAMP=$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
@@ -250,7 +289,7 @@ sudo -u postgres pg_dump -Fc -d "$DB" > "$FILE"
 chmod 640 "$FILE"
 test -s "$FILE"
 find "$DIR" -type f -name '*.dump' -mtime +"$RETAIN_DAYS" -delete
-%s`, util.ShellQuote(dir), util.ShellQuote(dbName), retain, uploadSnippet)
+%s%s`, pingStart, util.ShellQuote(dir), util.ShellQuote(dbName), retain, uploadSnippet, pingEnd)
 }
 
 func uploadBackup(cfg *config.ResolvedConfig, remoteFile string) error {

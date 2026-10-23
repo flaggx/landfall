@@ -1,10 +1,13 @@
 package db
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/flaggx/landfall/internal/config"
@@ -79,7 +82,10 @@ func TestBuildBootstrapScriptRemote(t *testing.T) {
 
 func TestBuildScheduleScript(t *testing.T) {
 	cfg := testCfg(t, false)
-	script := buildScheduleScript(cfg, "landfall-db-backup-prod", "/var/backups/landfall/prod", "my_webapp_prod", 7, 3, false)
+	script, err := buildScheduleScript(cfg, "landfall-db-backup-prod", "/var/backups/landfall/prod", "my_webapp_prod", 7, 3, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, needle := range []string{
 		"pg_dump -Fc",
 		"OnCalendar=",
@@ -97,7 +103,7 @@ func TestBuildScheduleScript(t *testing.T) {
 func TestScheduledBackupScript(t *testing.T) {
 	// A secret full of shell syntax must survive installation untouched.
 	upload := "\nexport AWS_SECRET_ACCESS_KEY='k$(touch /tmp/landfall-pwned)`id`'\naws s3 cp \"$FILE\" \"$DEST/$(basename \"$FILE\")\"\n"
-	inner := scheduledBackupScript("/var/backups/landfall/prod", "my_webapp_prod", 7, upload)
+	inner := scheduledBackupScript("/var/backups/landfall/prod", "my_webapp_prod", 7, upload, "")
 	for _, needle := range []string{
 		"DIR='/var/backups/landfall/prod'",
 		"DB='my_webapp_prod'",
@@ -123,7 +129,10 @@ func TestScheduledBackupScript(t *testing.T) {
 	}
 
 	cfg := testCfg(t, false)
-	outer := buildScheduleScript(cfg, "unit", "/var/backups/landfall/prod", "my_webapp_prod", 7, 3, false)
+	outer, err := buildScheduleScript(cfg, "unit", "/var/backups/landfall/prod", "my_webapp_prod", 7, 3, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(outer, "<<'LANDFALL_BACKUP_SCRIPT'") {
 		t.Fatalf("installer must write the backup script through a quoted heredoc:\n%s", outer)
 	}
@@ -200,5 +209,94 @@ backup_s3_secret_key = "sk"
 	}
 	if ak != "ak" || sk != "sk" {
 		t.Fatalf("keys: %s %s", ak, sk)
+	}
+}
+
+// Runs the generated backup script with stub sudo and pg_dump, against a
+// local server standing in for Healthchecks.io.
+func TestScheduledBackupScriptPings(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not available")
+	}
+
+	var mu sync.Mutex
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.Path)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name    string
+		dump    string
+		wantErr bool
+		want    string
+	}{
+		{"backup succeeds", "echo dumpdata", false, "/ping/abc"},
+		{"dump fails", "exit 1", true, "/ping/abc/fail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			hits = nil
+			mu.Unlock()
+			bin := t.TempDir()
+			// sudo -u postgres pg_dump ... -> run pg_dump directly.
+			writeExec(t, filepath.Join(bin, "sudo"), "#!/bin/sh\n[ \"$1\" = -u ] && shift 2\nexec \"$@\"\n")
+			writeExec(t, filepath.Join(bin, "pg_dump"), "#!/bin/sh\n"+tc.dump+"\n")
+
+			dir := filepath.Join(t.TempDir(), "backups")
+			script := scheduledBackupScript(dir, "app_prod", 7, "", srv.URL+"/ping/abc")
+			cmd := exec.Command(bash, "-c", script)
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error %v\n%s", err, tc.wantErr, out)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(hits) != 1 || hits[0] != tc.want {
+				t.Fatalf("pings = %v, want [%s]", hits, tc.want)
+			}
+		})
+	}
+}
+
+func TestScheduledBackupScriptWithoutPing(t *testing.T) {
+	inner := scheduledBackupScript("/var/backups/x", "db", 7, "", "")
+	if strings.Contains(inner, "PING_URL") || strings.Contains(inner, "curl") {
+		t.Fatalf("no ping configured, script must not curl:\n%s", inner)
+	}
+}
+
+func TestValidatePingURL(t *testing.T) {
+	for _, ok := range []string{"", "https://hc-ping.com/abc-123", "http://10.0.0.5:8000/ping/x"} {
+		if err := validatePingURL(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"hc-ping.com/abc", "https://x/$(id)", "https://x/a'b", "https://x/a b", "ftp://x"} {
+		if err := validatePingURL(bad); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}
+
+func TestScheduleUploadWithoutS3Fails(t *testing.T) {
+	cfg := testCfg(t, false)
+	if _, err := buildScheduleScript(cfg, "unit", "/var/backups/x", "db", 7, 3, true, ""); err == nil {
+		t.Fatal("--upload without S3 settings must fail instead of silently skipping the upload")
+	}
+}
+
+func writeExec(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
