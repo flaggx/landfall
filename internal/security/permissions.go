@@ -44,6 +44,10 @@ DEPLOY_USER=%s
 APP_USER=%s
 CACHE_DIR=%s
 
+# Explicit group: "chown user:" means the login group in GNU coreutils but
+# leaves the group unchanged in uutils (Ubuntu 26.04's default).
+DEPLOY_GROUP=$(id -gn "$DEPLOY_USER")
+
 if [ -d "$DEPLOY_PATH" ]; then
   if [ -n "$APP_USER" ] && id -u "$APP_USER" >/dev/null 2>&1; then
     APP_GROUP=$(id -gn "$APP_USER")
@@ -58,13 +62,13 @@ if [ -d "$DEPLOY_PATH" ]; then
       sudo chmod 750 "$CACHE_DIR"
     fi
   else
-    sudo chown -R "$DEPLOY_USER:" "$DEPLOY_PATH"
+    sudo chown -R "$DEPLOY_USER:$DEPLOY_GROUP" "$DEPLOY_PATH"
     sudo chmod 750 "$DEPLOY_PATH"
   fi
 fi
 
 if [ -f "$DEPLOY_PATH/.env.production" ]; then
-  sudo chown "$DEPLOY_USER:" "$DEPLOY_PATH/.env.production"
+  sudo chown "$DEPLOY_USER:$DEPLOY_GROUP" "$DEPLOY_PATH/.env.production"
   sudo chmod 600 "$DEPLOY_PATH/.env.production"
 fi
 

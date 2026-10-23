@@ -19,6 +19,8 @@ func TestBuildPermissionsScript(t *testing.T) {
 		"chmod 600",
 		"chmod 700",
 		"g+rX,g-w",
+		`DEPLOY_GROUP=$(id -gn "$DEPLOY_USER")`,
+		`sudo chown "$DEPLOY_USER:$DEPLOY_GROUP" "$DEPLOY_PATH/.env.production"`,
 		util.ShellQuote("app-prod"),
 		util.ShellQuote("/var/www/app-prod/.next/standalone/.next/cache"),
 		`if [ -f "$HOME/.ssh/id_ed25519" ]; then`,
