@@ -2,6 +2,7 @@ package security
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/flaggx/landfall/internal/config"
 	"github.com/flaggx/landfall/internal/ssh"
@@ -9,25 +10,61 @@ import (
 )
 
 func EnforcePermissions(cfg *config.ResolvedConfig, client *ssh.Client) error {
-	script := BuildPermissionsScript(cfg.Environment.Path, cfg.Environment.User)
-	_, err := client.RunScript("landfall-security-permissions.sh", script)
+	_, err := client.RunScript("landfall-security-permissions.sh", PermissionsScriptFor(cfg))
 	return err
 }
 
-func BuildPermissionsScript(deployPath, deployUser string) string {
+// PermissionsScriptFor builds the permissions script for an environment. If
+// the app user's name is invalid it falls back to deploy-user-only ownership,
+// so a deploy never fails over it; bootstrap reports the error instead.
+func PermissionsScriptFor(cfg *config.ResolvedConfig) string {
+	appUser, err := cfg.AppUser()
+	if err != nil {
+		appUser = ""
+	}
+	return BuildPermissionsScript(cfg.Environment.Path, cfg.Environment.User, appUser)
+}
+
+// RuntimeCacheDir is where a Next.js standalone server writes at runtime
+// (image optimizer and data cache): the only path the app user may write.
+func RuntimeCacheDir(deployPath string) string {
+	return strings.TrimRight(deployPath, "/") + "/.next/standalone/.next/cache"
+}
+
+// BuildPermissionsScript makes the deploy user own the deploy path. When
+// appUser exists on the server, the code is also given to the app user's
+// group read-only, and the runtime cache to the app user; until bootstrap has
+// created it, the script behaves as before.
+func BuildPermissionsScript(deployPath, deployUser, appUser string) string {
 	return fmt.Sprintf(`
 set -euo pipefail
 
 DEPLOY_PATH=%s
 DEPLOY_USER=%s
+APP_USER=%s
+CACHE_DIR=%s
 
 if [ -d "$DEPLOY_PATH" ]; then
-  sudo chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_PATH"
-  sudo chmod 750 "$DEPLOY_PATH"
+  if [ -n "$APP_USER" ] && id -u "$APP_USER" >/dev/null 2>&1; then
+    APP_GROUP=$(id -gn "$APP_USER")
+    # The app reads the code through its group but cannot change it. The env
+    # file is skipped: systemd reads it as root, so the app never needs to.
+    sudo chown -R "$DEPLOY_USER:$APP_GROUP" "$DEPLOY_PATH"
+    sudo find "$DEPLOY_PATH" -path "$DEPLOY_PATH/.env.production" -prune -o ! -type l -exec chmod g+rX,g-w {} +
+    sudo chmod 750 "$DEPLOY_PATH"
+    if [ -d "$DEPLOY_PATH/.next/standalone" ]; then
+      sudo mkdir -p "$CACHE_DIR"
+      sudo chown -R "$APP_USER:$APP_GROUP" "$CACHE_DIR"
+      sudo chmod 750 "$CACHE_DIR"
+    fi
+  else
+    sudo chown -R "$DEPLOY_USER:" "$DEPLOY_PATH"
+    sudo chmod 750 "$DEPLOY_PATH"
+  fi
 fi
 
 if [ -f "$DEPLOY_PATH/.env.production" ]; then
-  sudo chown "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_PATH/.env.production"
+  sudo chown "$DEPLOY_USER:" "$DEPLOY_PATH/.env.production"
   sudo chmod 600 "$DEPLOY_PATH/.env.production"
 fi
 
@@ -40,7 +77,7 @@ if [ -d "$HOME/.ssh" ]; then
     chmod 644 "$HOME/.ssh/id_ed25519.pub"
   fi
 fi
-`, util.ShellQuote(deployPath), util.ShellQuote(deployUser))
+`, util.ShellQuote(deployPath), util.ShellQuote(deployUser), util.ShellQuote(appUser), util.ShellQuote(RuntimeCacheDir(deployPath)))
 }
 
 func BuildPermissionsCheckScript(deployPath, deployUser string, expectEnvFile bool) string {

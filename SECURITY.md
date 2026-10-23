@@ -59,11 +59,13 @@ with that.
 
 ## Known limitations
 
-- **The deploy user has passwordless sudo.** Setup gives the SSH user
-  `NOPASSWD: ALL`, and the app's systemd service runs as that same user, so a
-  compromise of the app is a compromise of the server. Narrowing this to the
-  commands Landfall needs, or running the app as a separate unprivileged
-  user, is planned.
+- **The deploy user has passwordless sudo.** Landfall's setup commands
+  (packages, firewall, Postgres, Redis, backups) need root, so whoever holds
+  the deploy user's SSH key controls the server. Since 0.3.0 the app itself
+  runs as a separate unprivileged, sandboxed user, so a compromise of the app
+  is no longer a compromise of the server (see the README, "The app runs as
+  its own user"). Narrowing the deploy user's sudo is not planned: anyone
+  with its key can already deploy arbitrary code.
 - **Redis isolates environments by ACL user, not by database.** Each
   environment's user can reach every database index on the instance.
 - **Scheduled S3 uploads store the bucket keys on the server**, in the

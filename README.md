@@ -465,7 +465,7 @@ Optional: `--ssh-disable-password` (only after keys work), `--auto-reboot`.
 landfall check --env prod
 ```
 
-Audits secrets, SSH, hardening, Node, systemd, Postgres/Redis (if configured), and the health endpoint (`"ok": true`).
+Audits secrets, SSH, hardening, Node, systemd, the service's user and sandbox, Postgres/Redis (if configured), and the health endpoint (`"ok": true`).
 
 ---
 
@@ -481,7 +481,7 @@ Example config: [templates/landfall.toml.example](templates/landfall.toml.exampl
 
 **Required per environment:** `host`, `user`, `path`, `branch`, `port`.
 
-**Optional per environment:** `build` (`"remote"` or `"local"`), `release_command`.
+**Optional per environment:** `build` (`"remote"` or `"local"`), `release_command`, `app_user` (the user the app runs as; default `<project>-<env>`).
 
 Do **not** commit real project configs into *this* tooling repository — only into your **app** repo. New projects should use `landfall.toml`; existing `vpsdeploy.toml` keeps working.
 
@@ -539,7 +539,8 @@ What to know:
 - **The upload mirrors the build onto the deploy path** (including
   `node_modules`, so the release command has its tools). Files on the server
   that are not part of the build are deleted, except `.git`, `.env*`,
-  `.deploy-meta` and `.next/cache`. The first upload is large; later ones only
+  `.deploy-meta`, `.next/cache` and the running app's cache
+  (`.next/standalone/.next/cache`). The first upload is large; later ones only
   send what changed.
 - `release_command` is run as shell on the VPS with the app's environment
   loaded. It comes from your own config, like a `package.json` script.
@@ -549,10 +550,34 @@ See [SECURITY.md](SECURITY.md#local-builds) for the trade-offs.
 ### VPS layout after bootstrap
 
 ```
-/var/www/my-webapp-prod/
+/var/www/my-webapp-prod/                   # owned by the deploy user, group my-webapp-prod, 750
 /etc/systemd/system/my-webapp-prod.service
 /etc/caddy/landfall/my-webapp-prod.caddy   # if --caddy
 ```
+
+### The app runs as its own user
+
+The deploy user needs sudo, so Landfall doesn't run your app as it: a
+compromised app would be root. `bootstrap` creates a system user named after
+the service (`my-webapp-prod`, or `app_user`), with no shell, no home, no
+password and no sudo, and the systemd unit runs the app as that user:
+
+- **The app can read its code but not change it.** The deploy user owns the
+  deploy path; the app user's group can read it, and nobody else can.
+- **The only place it can write is Next.js's runtime cache**
+  (`.next/standalone/.next/cache`, for the image optimizer and data cache).
+  The rest of the filesystem is read-only to it (`ProtectSystem=strict`), and
+  it gets a private `/tmp`.
+- **It can't gain privileges.** `NoNewPrivileges` stops sudo and setuid
+  programs, along with the usual systemd sandboxing (kernel, devices, clock,
+  namespaces).
+- **`.env.production` stays readable by the deploy user only.** systemd reads
+  it as root when it starts the app.
+
+If your app writes files to disk, put them in object storage or a database
+instead; a write anywhere else fails with "read-only file system".
+`landfall check` fails while the service still runs as root or as the deploy
+user.
 
 ---
 

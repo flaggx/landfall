@@ -5,6 +5,44 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-23
+
+### Upgrading from 0.2.x
+
+Run `landfall bootstrap --env <env>` once per environment, then deploy. It
+creates the app user, hands it the code read-only and installs the sandboxed
+unit; the restart takes a few seconds. Until then deploys keep working as
+before and `landfall check` reports `service user` and `service sandbox` as
+failing. If your app writes to disk anywhere other than Next.js's cache, move
+that to object storage or a database first.
+
+### Security
+
+- The app no longer runs as the deploy user. That user has passwordless
+  sudo, so any code execution in the app was root on the VPS. `bootstrap`
+  now creates an unprivileged system user per environment (default
+  `<project>-<env>`, or `app_user`) with no shell, home or sudo, and the
+  systemd unit runs the app as it.
+- The unit is sandboxed: `NoNewPrivileges` (sudo and setuid programs no
+  longer work from the app), `ProtectSystem=strict` with only Next.js's
+  runtime cache writable, `PrivateTmp`, `ProtectHome` (unless the app lives
+  under `/home`), and the kernel, device, clock, namespace and address-family
+  restrictions.
+- The deploy user owns the code and the app user's group can only read it, so
+  a compromised app can't change its own code. Group write bits left by
+  Ubuntu's umask are removed on every deploy.
+
+### Added
+
+- `app_user` per environment.
+- `landfall check` reports the service's user and whether `NoNewPrivileges`
+  is on.
+
+### Changed
+
+- Local-build uploads no longer set group ownership (`rsync --no-group`) and
+  leave the running app's cache in place instead of deleting it.
+
 ## [0.2.0] - 2026-10-13
 
 ### Upgrading from 0.1.x
@@ -127,6 +165,7 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
+[0.3.0]: https://github.com/flaggx/landfall/releases/tag/v0.3.0
 [0.2.0]: https://github.com/flaggx/landfall/releases/tag/v0.2.0
 [0.1.2]: https://github.com/flaggx/landfall/releases/tag/v0.1.2
 [0.1.1]: https://github.com/flaggx/landfall/releases/tag/v0.1.1

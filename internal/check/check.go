@@ -183,6 +183,21 @@ else
   fail systemd "unit missing (run: landfall bootstrap)"
 fi
 
+SERVICE_USER=$(systemctl show -p User --value %s 2>/dev/null || true)
+if [ -z "$SERVICE_USER" ] || [ "$SERVICE_USER" = "root" ]; then
+  fail service_user "runs as root (run: landfall bootstrap)"
+elif [ "$SERVICE_USER" = %s ]; then
+  fail service_user "runs as the deploy user, which has sudo (run: landfall bootstrap)"
+else
+  pass service_user "$SERVICE_USER"
+fi
+
+if [ "$(systemctl show -p NoNewPrivileges --value %s 2>/dev/null || true)" = "yes" ]; then
+  pass service_sandbox "NoNewPrivileges on"
+else
+  fail service_sandbox "the app could use sudo or setuid programs (run: landfall bootstrap)"
+fi
+
 # PostgreSQL
 if [ "%s" = "true" ]; then
   if command -v psql >/dev/null 2>&1 && sudo systemctl is-active postgresql >/dev/null 2>&1; then
@@ -241,6 +256,7 @@ chmod 600 "$RESULT"
 `, util.ShellQuote(resultPath), permissionsChecks,
 		util.ShellQuote(deployPath), util.ShellQuote(deployPath),
 		serviceName, serviceName,
+		serviceName, util.ShellQuote(cfg.Environment.User), serviceName,
 		boolString(expectDB), dbName, dbName,
 		boolString(expectRedis), redisPort, redis.CLIPrelude(redis.DefaultPaths), util.ShellQuote(redisUser), redisUser, redisDB,
 		healthURL, healthURL, healthURL, healthURL)

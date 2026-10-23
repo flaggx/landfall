@@ -4,10 +4,13 @@ After=network.target
 
 [Service]
 Type=simple
+# A dedicated user with no sudo and no shell: a compromised app can't become
+# root, and can't change its own code (the deploy user owns it).
 User={{ .User }}
 WorkingDirectory={{ .WorkDir }}/.next/standalone
 Environment=NODE_ENV=production
 Environment=PORT={{ .Port }}
+# Read by systemd as root, so the file stays readable by the deploy user only.
 EnvironmentFile=-{{ .WorkDir }}/.env.production
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
@@ -16,6 +19,29 @@ TimeoutStopSec=20
 KillMode=mixed
 KillSignal=SIGTERM
 FinalKillSignal=SIGKILL
+
+# Sandboxing. Nothing the app starts can gain privileges (sudo, setuid), and
+# the filesystem is read-only apart from Next.js's runtime cache.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=-{{ .CacheDir }}
+PrivateTmp=true
+{{- if not .PathUnderHome }}
+ProtectHome=true
+{{- end }}
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

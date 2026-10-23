@@ -198,3 +198,44 @@ func TestResolveSecretRefNotAPlaceholder(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestAppUser(t *testing.T) {
+	cfg := &ResolvedConfig{
+		Project:     ProjectConfig{Project: Project{Name: "shop"}},
+		EnvName:     "prod",
+		Environment: Environment{User: "deploy"},
+	}
+	if got, err := cfg.AppUser(); err != nil || got != "shop-prod" {
+		t.Fatalf("default: got %q, %v", got, err)
+	}
+
+	cfg.Environment.AppUser = "shopapp"
+	if got, err := cfg.AppUser(); err != nil || got != "shopapp" {
+		t.Fatalf("override: got %q, %v", got, err)
+	}
+
+	for _, bad := range []string{"deploy", "root", "Shop", "-shop", "shop app", strings.Repeat("a", 33)} {
+		cfg.Environment.AppUser = bad
+		if _, err := cfg.AppUser(); err == nil {
+			t.Errorf("app_user %q should be rejected", bad)
+		}
+	}
+
+	// An unusable default asks for app_user instead of failing obscurely.
+	cfg.Environment.AppUser = ""
+	cfg.Project.Project.Name = "My Shop"
+	if _, err := cfg.AppUser(); err == nil || !strings.Contains(err.Error(), "set app_user") {
+		t.Fatalf("expected a hint to set app_user, got %v", err)
+	}
+}
+
+func TestValidateEnvironmentAppUser(t *testing.T) {
+	env := Environment{Host: "h", User: "deploy", Path: "/p", Branch: "main", Port: 3000, AppUser: "deploy"}
+	if err := validateEnvironment("prod", env); err == nil || !strings.Contains(err.Error(), "app_user") {
+		t.Fatalf("expected app_user error, got %v", err)
+	}
+	env.AppUser = "app-prod"
+	if err := validateEnvironment("prod", env); err != nil {
+		t.Fatal(err)
+	}
+}

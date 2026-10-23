@@ -24,6 +24,10 @@ const (
 
 var secretRefPattern = regexp.MustCompile(`^\{\{secret:([a-zA-Z0-9_]+)\}\}$`)
 
+// appUserPattern matches names useradd accepts by default (NAME_REGEX), capped
+// at the 32 characters Linux allows.
+var appUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
 type GlobalConfig struct {
 	SSHKeyPath string `toml:"ssh_key_path"`
 }
@@ -51,10 +55,13 @@ type Environment struct {
 	Build string `toml:"build"`
 	// ReleaseCommand runs on the VPS after the build is in place and before
 	// the service restarts (e.g. database migrations).
-	ReleaseCommand string            `toml:"release_command"`
-	Env            map[string]string `toml:"env"`
-	Postgres       *PostgresConfig   `toml:"postgres"`
-	Redis          *RedisConfig      `toml:"redis"`
+	ReleaseCommand string `toml:"release_command"`
+	// AppUser is the unprivileged system user the app's service runs as.
+	// Defaults to the service name (<project>-<env>); bootstrap creates it.
+	AppUser  string            `toml:"app_user"`
+	Env      map[string]string `toml:"env"`
+	Postgres *PostgresConfig   `toml:"postgres"`
+	Redis    *RedisConfig      `toml:"redis"`
 }
 
 const (
@@ -309,11 +316,43 @@ func validateEnvironment(name string, env Environment) error {
 	if env.Port <= 0 {
 		return fmt.Errorf("environments.%s.port must be > 0", name)
 	}
+	if env.AppUser != "" {
+		if err := validateAppUser(env.AppUser, env.User); err != nil {
+			return fmt.Errorf("environments.%s.app_user: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateAppUser(appUser, deployUser string) error {
+	if !appUserPattern.MatchString(appUser) {
+		return fmt.Errorf("%q is not a valid user name (lowercase letters, digits, _ and -, at most 32 characters)", appUser)
+	}
+	if appUser == "root" || appUser == deployUser {
+		return fmt.Errorf("%q must be a separate, unprivileged user, not root or the deploy user", appUser)
+	}
 	return nil
 }
 
 func (c *ResolvedConfig) ServiceName() string {
 	return fmt.Sprintf("%s-%s", c.Project.Project.Name, c.EnvName)
+}
+
+// AppUser is the user the app's service runs as: the environment's app_user,
+// or the service name. It never has sudo, so a compromised app can't become
+// root the way it could when the service ran as the deploy user.
+func (c *ResolvedConfig) AppUser() (string, error) {
+	name := c.Environment.AppUser
+	if name == "" {
+		name = c.ServiceName()
+	}
+	if err := validateAppUser(name, c.Environment.User); err != nil {
+		if c.Environment.AppUser == "" {
+			return "", fmt.Errorf("the default app user %s; set app_user for environment %s", err, c.EnvName)
+		}
+		return "", err
+	}
+	return name, nil
 }
 
 func (c *ResolvedConfig) SSHAddress() string {

@@ -124,6 +124,8 @@ func TestRsyncArgs(t *testing.T) {
 		"/.env",
 		"/.env.*",
 		"/.deploy-meta",
+		"/.next/standalone/.next/cache",
+		"--no-group",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("rsync args missing %q:\n%s", want, joined)
@@ -152,6 +154,9 @@ func TestScriptsAreValidBash(t *testing.T) {
 	build := buildScript(cfg)
 	if !strings.Contains(build, "export LANDFALL_RELEASE=1") || !strings.Contains(build, "export LANDFALL_BUILD=remote") {
 		t.Fatalf("build script missing landfall markers:\n%s", build)
+	}
+	if !strings.Contains(build, "'/var/www/app-prod/.next/standalone/.next/cache'") {
+		t.Fatalf("build script must reclaim the app user's runtime cache:\n%s", build)
 	}
 	release := releaseScript(cfg)
 	if !strings.Contains(release, "npx drizzle-kit migrate") || !strings.Contains(release, ". ./.env.production") {

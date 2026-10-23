@@ -5,10 +5,12 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
 	"github.com/flaggx/landfall/internal/config"
+	"github.com/flaggx/landfall/internal/security"
 	"github.com/flaggx/landfall/internal/ssh"
 )
 
@@ -20,9 +22,13 @@ var caddyTemplate string
 
 type systemdData struct {
 	ServiceName string
-	User        string
-	WorkDir     string
-	Port        int
+	// User is the app user the service runs as, never the deploy user.
+	User     string
+	WorkDir  string
+	Port     int
+	CacheDir string
+	// PathUnderHome turns off ProtectHome, which would hide the app.
+	PathUnderHome bool
 }
 
 type caddyData struct {
@@ -41,13 +47,27 @@ func Run(cfg *config.ResolvedConfig, installCaddy bool) error {
 	}
 	defer client.Close()
 
+	appUser, err := cfg.AppUser()
+	if err != nil {
+		return err
+	}
+
 	fmt.Fprintf(os.Stdout, "Bootstrapping %s on %s...\n", cfg.EnvName, cfg.SSHAddress())
 
 	if err := runBaseSetup(client, cfg); err != nil {
 		return fmt.Errorf("base setup: %w", err)
 	}
 
-	if err := installSystemdUnit(client, cfg); err != nil {
+	if err := createAppUser(client, appUser); err != nil {
+		return fmt.Errorf("app user: %w", err)
+	}
+
+	// Before the unit restarts as the app user, so it can read the code.
+	if err := security.EnforcePermissions(cfg, client); err != nil {
+		return fmt.Errorf("permissions: %w", err)
+	}
+
+	if err := installSystemdUnit(client, cfg, appUser); err != nil {
 		return fmt.Errorf("systemd: %w", err)
 	}
 
@@ -98,7 +118,25 @@ fi
 	return err
 }
 
-func installSystemdUnit(client *ssh.Client, cfg *config.ResolvedConfig) error {
+// createAppUser adds the system user the app runs as: no login shell, no
+// home directory, no sudo, no password. Existing users are left alone.
+func createAppUser(client *ssh.Client, appUser string) error {
+	_, err := client.RunScript("landfall-bootstrap-app-user.sh", appUserScript(appUser))
+	return err
+}
+
+func appUserScript(appUser string) string {
+	return fmt.Sprintf(`
+set -euo pipefail
+APP_USER=%s
+if ! id -u "$APP_USER" >/dev/null 2>&1; then
+  sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$APP_USER"
+  echo "Created app user $APP_USER"
+fi
+`, shellQuote(appUser))
+}
+
+func installSystemdUnit(client *ssh.Client, cfg *config.ResolvedConfig, appUser string) error {
 	tmpl, err := template.New("systemd").Parse(systemdTemplate)
 	if err != nil {
 		return err
@@ -106,10 +144,12 @@ func installSystemdUnit(client *ssh.Client, cfg *config.ResolvedConfig) error {
 
 	var buf bytes.Buffer
 	data := systemdData{
-		ServiceName: cfg.ServiceName(),
-		User:        cfg.Environment.User,
-		WorkDir:     cfg.Environment.Path,
-		Port:        cfg.Environment.Port,
+		ServiceName:   cfg.ServiceName(),
+		User:          appUser,
+		WorkDir:       cfg.Environment.Path,
+		Port:          cfg.Environment.Port,
+		CacheDir:      security.RuntimeCacheDir(cfg.Environment.Path),
+		PathUnderHome: pathUnderHome(cfg.Environment.Path),
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return err
@@ -217,6 +257,16 @@ func printNextSteps(cfg *config.ResolvedConfig) {
 	if cfg.Environment.Domain != "" {
 		fmt.Fprintf(os.Stdout, "6. Point DNS for %s to %s\n", cfg.Environment.Domain, cfg.Environment.Host)
 	}
+}
+
+func pathUnderHome(path string) bool {
+	clean := filepath.Clean(path)
+	for _, dir := range []string{"/home", "/root", "/run/user"} {
+		if clean == dir || strings.HasPrefix(clean, dir+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func shellQuote(s string) string {

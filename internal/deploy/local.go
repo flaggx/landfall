@@ -31,6 +31,8 @@ var uploadExcludes = []string{
 	"/.env.*",
 	"/.deploy-meta",
 	"/.next/cache",
+	// The running app's cache, owned by the app user (see security.RuntimeCacheDir).
+	"/.next/standalone/.next/cache",
 }
 
 func validateRef(ref string) error {
@@ -216,6 +218,9 @@ func rsyncArgs(cfg *config.ResolvedConfig, dir string) []string {
 
 	args := []string{
 		"--archive",
+		// Leave group ownership to the permissions step, which gives the code
+		// to the app user's group; local group IDs mean nothing on the server.
+		"--no-group",
 		"--compress",
 		"--delete",
 		// Don't let a symlink in the build point outside the deploy path.

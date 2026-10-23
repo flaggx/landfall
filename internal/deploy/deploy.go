@@ -192,8 +192,7 @@ func formatEnvFile(env map[string]string) string {
 }
 
 func enforcePermissions(client *ssh.Client, cfg *config.ResolvedConfig) error {
-	script := security.BuildPermissionsScript(cfg.Environment.Path, cfg.Environment.User)
-	_, err := client.RunScript("landfall-permissions.sh", script)
+	_, err := client.RunScript("landfall-permissions.sh", security.PermissionsScriptFor(cfg))
 	return err
 }
 
@@ -213,6 +212,10 @@ func buildScript(cfg *config.ResolvedConfig) string {
 	return fmt.Sprintf(`
 set -euo pipefail
 cd %s
+# The app user owns the runtime cache; take it back so the build can replace .next.
+if [ -d %s ]; then
+  sudo chown -R "$(id -un):$(id -gn)" %s
+fi
 # Install build tooling (typescript, drizzle-kit, etc.) even when the
 # production env file sets NODE_ENV=production.
 npm ci --include=dev
@@ -226,7 +229,9 @@ if [ -f .env.production ]; then
   set +a
 fi
 npm run build
-`, shellQuote(cfg.Environment.Path), releaseFlag)
+`, shellQuote(cfg.Environment.Path),
+		shellQuote(security.RuntimeCacheDir(cfg.Environment.Path)), shellQuote(security.RuntimeCacheDir(cfg.Environment.Path)),
+		releaseFlag)
 }
 
 // runReleaseCommand runs the environment's release_command on the server with
