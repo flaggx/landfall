@@ -311,7 +311,9 @@ func TestBootstrapAgainstRealRedis(t *testing.T) {
 	if got := s.cli("-u", newURL, "ping"); got != "PONG" {
 		t.Fatalf("new password does not work: %q", got)
 	}
-	if got := s.cli("-u", url, "ping"); !strings.Contains(got, "WRONGPASS") {
+	// redis-cli 7 reports WRONGPASS; 6.0 prints "AUTH failed" and then fails
+	// the command unauthenticated (NOAUTH). Either way it must not answer.
+	if got := s.cli("-u", url, "ping"); got == "PONG" || !(strings.Contains(got, "WRONGPASS") || strings.Contains(got, "AUTH failed")) {
 		t.Fatalf("old password must stop working, got %q", got)
 	}
 
