@@ -3,6 +3,7 @@ package redis
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,13 +138,49 @@ func (s *redisSandbox) bootstrap(reset bool) map[string]string {
 	return util.ParseEnvFile(string(raw))
 }
 
-// cli runs redis-cli with the given connection arguments and returns its output.
+// cli runs redis-cli. "-u <redis URL>" is turned into --user/--pass/-n,
+// because redis-cli 6.0 ignores the username in a URL and would try the
+// password against the default user. (App client libraries read it fine.)
 func (s *redisSandbox) cli(args ...string) string {
 	s.t.Helper()
-	full := append([]string{"--no-auth-warning", "-p", fmt.Sprint(s.port)}, args...)
+	full := []string{"--no-auth-warning", "-p", fmt.Sprint(s.port)}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-u" && i+1 < len(args) {
+			u, err := url.Parse(args[i+1])
+			if err != nil {
+				s.t.Fatalf("bad redis URL %q: %v", args[i+1], err)
+			}
+			pass, _ := u.User.Password()
+			full = append(full, "--user", u.User.Username(), "--pass", pass)
+			if db := strings.TrimPrefix(u.Path, "/"); db != "" {
+				full = append(full, "-n", db)
+			}
+			i++
+			continue
+		}
+		full = append(full, args[i])
+	}
 	cmd := exec.Command(filepath.Join(s.bin, "redis-cli"), full...)
 	out, _ := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out))
+}
+
+// appRules are the ACL rules an older Landfall gave an app user, in a form
+// this Redis accepts: channel rules (&*) only exist from Redis 6.2.
+func (s *redisSandbox) appRules() []string {
+	s.t.Helper()
+	out, err := exec.Command(filepath.Join(s.bin, "redis-server"), "--version").Output()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(string(out[strings.Index(string(out), "v=")+2:]), "%d.%d", &major, &minor); err != nil {
+		s.t.Fatalf("cannot parse %q: %v", out, err)
+	}
+	if major > 6 || (major == 6 && minor >= 2) {
+		return []string{"~*", "&*", "+@all"}
+	}
+	return []string{"~*", "+@all"}
 }
 
 func (s *redisSandbox) pid() string {
@@ -300,7 +337,7 @@ func TestBootstrapUpgradesExistingRedis(t *testing.T) {
 		t.Fatalf("restart: %v\n%s", err, out)
 	}
 	waitForRedis(t, s)
-	if got := s.cli("ACL", "SETUSER", "app_prod", "on", ">oldpassword", "~*", "&*", "+@all"); got != "OK" {
+	if got := s.cli(append([]string{"ACL", "SETUSER", "app_prod", "on", ">oldpassword"}, s.appRules()...)...); got != "OK" {
 		t.Fatalf("setup: %q", got)
 	}
 	oldURL := fmt.Sprintf("redis://app_prod:oldpassword@127.0.0.1:%d/0", s.port)
@@ -355,7 +392,7 @@ func TestBootstrapKeepsInMemoryUsersWhenAddingACLFile(t *testing.T) {
 	}
 	waitForRedis(t, s)
 	for _, u := range []string{"app_prod", "app_staging"} {
-		if got := s.cli("ACL", "SETUSER", u, "on", ">old-"+u, "~*", "&*", "+@all"); got != "OK" {
+		if got := s.cli(append([]string{"ACL", "SETUSER", u, "on", ">old-" + u}, s.appRules()...)...); got != "OK" {
 			t.Fatalf("setup %s: %q", u, got)
 		}
 	}

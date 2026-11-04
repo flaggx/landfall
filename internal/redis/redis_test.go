@@ -95,8 +95,11 @@ func TestVersionSnippet(t *testing.T) {
 			if tc.versionOutput != "" {
 				stub = "#!/bin/bash\necho '" + tc.versionOutput + "'\n"
 			}
-			if err := os.WriteFile(filepath.Join(bin, "redis-server"), []byte(stub), 0o755); err != nil {
-				t.Fatal(err)
+			// Stub redis-cli too, so the fallback cannot find a real one on PATH.
+			for _, name := range []string{"redis-server", "redis-cli"} {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(stub), 0o755); err != nil {
+					t.Fatal(err)
+				}
 			}
 			cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+versionSnippet+`printf '%s|%s' "$CHANNELS" "$BIND_LINE"`)
 			// Only the stub and coreutils: no real redis-server or redis-cli.
