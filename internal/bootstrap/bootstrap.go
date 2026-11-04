@@ -207,21 +207,66 @@ fi
 		return err
 	}
 
-	applyScript := fmt.Sprintf(`
-set -euo pipefail
-sudo mkdir -p /etc/caddy/landfall
-sudo mv %s /etc/caddy/landfall/%s.caddy
-CADDYFILE="/etc/caddy/Caddyfile"
-# Replace the stock :80 demo site so it does not steal HTTP traffic from
-# imported vhosts (needed for ACME HTTP-01 and reverse proxy routing).
-if grep -q 'root \* /usr/share/caddy' "$CADDYFILE" 2>/dev/null || ! grep -q 'import landfall' "$CADDYFILE" 2>/dev/null; then
-  printf '%%s\n' 'import landfall/*' | sudo tee "$CADDYFILE" >/dev/null
-fi
-sudo systemctl reload caddy || sudo systemctl restart caddy
-`, shellQuote(caddyPath), cfg.ServiceName())
+	applyScript := caddyApplyScript("/etc/caddy", caddyPath, cfg.ServiceName())
 
 	_, err = client.RunScript("landfall-bootstrap-caddy-apply.sh", applyScript)
 	return err
+}
+
+// stockCaddyfile is the Caddyfile the caddy package installs, with comments
+// and all whitespace removed: a :80 demo site serving /usr/share/caddy.
+const stockCaddyfile = ":80{root*/usr/share/caddyfile_server}"
+
+// caddyApplyScript installs a site file into <caddyDir>/landfall and makes
+// sure the main Caddyfile imports that directory, without losing sites the
+// server already has:
+//
+//   - missing, empty or the package's stock demo file (whose :80 site would
+//     steal HTTP traffic from the imported vhosts): replaced by the import.
+//   - anything else: the import is appended, and the rest is left as it is.
+//
+// The previous Caddyfile is backed up first. If Caddy rejects the result,
+// the backup is restored and nothing is reloaded.
+func caddyApplyScript(caddyDir, uploadedSite, serviceName string) string {
+	return fmt.Sprintf(`
+set -euo pipefail
+CADDY_DIR=%s
+SITE_SRC=%s
+SITE_NAME=%s
+STOCK=%s
+CADDYFILE="$CADDY_DIR/Caddyfile"
+
+sudo mkdir -p "$CADDY_DIR/landfall"
+sudo mv "$SITE_SRC" "$CADDY_DIR/landfall/$SITE_NAME.caddy"
+
+if ! sudo grep -qE '^[[:space:]]*import[[:space:]]+landfall/' "$CADDYFILE" 2>/dev/null; then
+  BACKUP=""
+  if sudo test -s "$CADDYFILE"; then
+    BACKUP="$CADDYFILE.landfall-backup-$(date -u +%%Y%%m%%dT%%H%%M%%SZ)"
+    sudo cp -p "$CADDYFILE" "$BACKUP"
+    echo "Backed up $CADDYFILE to $BACKUP"
+  fi
+  NORMALIZED=$(sudo cat "$CADDYFILE" 2>/dev/null | sed -e 's/#.*//' | tr -d '[:space:]' || true)
+  if [ -z "$NORMALIZED" ] || [ "$NORMALIZED" = "$STOCK" ]; then
+    printf '%%s\n' 'import landfall/*' | sudo tee "$CADDYFILE" >/dev/null
+  else
+    # Keep the existing sites; a top-level import at the end adds ours.
+    printf '\n# Sites managed by landfall\nimport landfall/*\n' | sudo tee -a "$CADDYFILE" >/dev/null
+    echo "Added 'import landfall/*' to the existing $CADDYFILE"
+  fi
+  if ! sudo caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+    if [ -n "$BACKUP" ]; then
+      sudo cp -p "$BACKUP" "$CADDYFILE"
+    else
+      sudo rm -f "$CADDYFILE"
+    fi
+    echo "Caddy rejected $CADDYFILE with the landfall import, so it was restored unchanged." >&2
+    echo "Add 'import landfall/*' to it yourself, then run: sudo systemctl reload caddy" >&2
+    exit 1
+  fi
+fi
+sudo systemctl reload caddy || sudo systemctl restart caddy
+`, shellQuote(caddyDir), shellQuote(uploadedSite), shellQuote(serviceName), shellQuote(stockCaddyfile))
 }
 
 func setupDeployKey(client *ssh.Client, cfg *config.ResolvedConfig) error {
