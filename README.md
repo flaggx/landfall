@@ -321,7 +321,8 @@ landfall deploy --env prod
 | `landfall db backup` / `backups` / `restore` / `schedule` | Local backups (S3 upload optional) |
 | `landfall db replica bootstrap --replica-host <ip>` | Streaming read replica (**experimental**) |
 | `landfall db pooler` | PgBouncer on the DB host (**experimental**) |
-| `landfall redis bootstrap` | Redis + ACL user |
+| `landfall redis bootstrap` | The environment's own Redis instance + ACL user |
+| `landfall redis migrate` | Move an environment from the shared Redis to its own instance, with its data |
 | `landfall security harden` / `status` | Ubuntu hardening |
 | `landfall check` | Full setup validation |
 | `landfall version` | Print CLI version |
@@ -389,24 +390,66 @@ landfall redis status --env prod
 REDIS_URL = "{{secret:prod_redis_url}}"
 ```
 
-Redis binds to `127.0.0.1`. Prod DB index `0`, dev `1` by default.
+**Each environment gets its own Redis instance**, run by the
+`redis-server` package's `redis-server@<name>` unit (`<name>` is
+`<project>-<env>`, e.g. `redis-server@my-webapp-dev`), with its own port,
+memory limit, data and users. Environments on one VPS (and other projects
+on it) can't read, flush or crowd out each other's data. A single shared
+Redis can't offer that: its users can switch to any DB index, `FLUSHALL`
+wipes every environment, and they all share one memory limit.
 
 What `redis bootstrap` sets up, and re-checks on every run:
 
-- **A password on Redis's built-in `default` user.** Out of the box it has
-  none, so any process on the VPS could read or flush every environment's
-  data. The password is generated on the server and kept in
-  `/etc/landfall/redis-admin-password` (root only); Landfall's own commands
-  read it through `sudo`. It never leaves the server.
-- **One ACL user per environment** that can use every key and command except
-  the admin ones (`ACL`, `CONFIG`, `SHUTDOWN`, ...).
-- **An `aclfile`** (`/var/lib/redis/users.acl`), so users survive a Redis
-  restart.
+- **The instance**: `/etc/redis/redis-<name>.conf` (managed by Landfall),
+  data and `aclfile` in `/var/lib/redis/<name>/`, listening on `127.0.0.1`.
+  Without `port`, bootstrap picks the first free port from 6380 and keeps it.
+- **A memory limit**: 128 MB by default, no limit for `prod`/`production`.
+  At the limit, writes fail with an `OOM` error (`noeviction`) instead of
+  keys silently disappearing, which queues such as BullMQ require. For a
+  pure cache, `allkeys-lru` evicts old keys instead.
+- **A password on the instance's built-in `default` user**, generated on the
+  server in `/etc/landfall/redis-admin-<name>` (root only). It never leaves
+  the server.
+- **The app's ACL user**, which can use every key and command in its own
+  instance except the admin ones (`ACL`, `CONFIG`, `SHUTDOWN`, ...).
 
-Running it again is safe: it only restarts Redis when it had to change the
-config, and it keeps the environment's password unless you pass
-`--reset-password`. Servers set up with Landfall 0.1.x should run it once;
-see the [changelog](CHANGELOG.md).
+Running it again is safe: it only restarts the instance when its config
+changed (Redis saves its data on a clean stop), and it keeps the password
+unless you pass `--reset-password`.
+
+```toml
+# Optional, per environment
+[environments.dev.redis]
+maxmemory = "256mb"             # or "0" for no limit
+maxmemory_policy = "allkeys-lru" # default noeviction
+port = 6390                     # default: picked from 6380 up
+```
+
+### Moving an environment off the shared Redis
+
+Landfall 0.4 and older kept every environment in one Redis on port 6379,
+told apart only by DB index. `landfall check` warns about environments still
+there, and `redis bootstrap` refuses to start them on an empty instance.
+Move each one, prod included, with:
+
+```bash
+landfall redis migrate --env dev
+```
+
+It creates the environment's instance, **stops the app**, copies the
+environment's keys (`MIGRATE ... COPY`: types, TTLs and odd key names are
+kept, and the shared Redis keeps its copy), saves the new `REDIS_URL` secret,
+rewrites `.env.production` on the server, starts the app and runs its health
+check. The app is down for a few seconds; nothing else is restarted or
+rebuilt. The DB index it copies is the one in the environment's current
+`REDIS_URL` secret (or `--from-db`); if another environment on the host uses
+the same index, migrate stops rather than copy that environment's keys too.
+
+To roll back, set the secret to the old URL and deploy. Once you're happy,
+`landfall redis status --env <env>` shows how to remove the old user from the
+shared Redis. When no environment uses it anymore, you can stop it:
+`sudo systemctl disable --now redis-server`. To start an environment on an
+empty instance instead, use `landfall redis bootstrap --fresh`.
 
 ---
 

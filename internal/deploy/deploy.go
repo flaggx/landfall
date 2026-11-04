@@ -426,3 +426,16 @@ func shellQuote(s string) string {
 
 // Avoid unused import when building with certain flags
 var _ io.Writer = os.Stdout
+
+// WriteEnvFile writes the environment's .env.production on the server from a
+// config with secrets resolved, as the deploy's env step does. Used by
+// `landfall redis migrate` to switch REDIS_URL without a full deploy.
+func WriteEnvFile(client *ssh.Client, cfg *config.ResolvedConfig) error {
+	return writeEnvFile(client, cfg)
+}
+
+// HealthCheck waits for the environment's health endpoint to report ok, as
+// the deploy's health step does (a no-op without health_check).
+func HealthCheck(client *ssh.Client, cfg *config.ResolvedConfig) error {
+	return healthCheck(client, cfg)
+}

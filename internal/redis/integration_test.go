@@ -9,21 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/flaggx/landfall/internal/util"
 )
 
-// These tests run the real bootstrap and status scripts against a throwaway
-// Redis server. Opt in with LANDFALL_REDIS_BIN_DIR=<dir containing
-// redis-server and redis-cli>. sudo, systemctl, apt-get and chown are
-// replaced by stubs so nothing outside the test's temp directory is touched.
+// These tests run the real bootstrap, status, check and migration scripts
+// against real Redis servers. Opt in with LANDFALL_REDIS_BIN_DIR=<dir
+// containing redis-server and redis-cli>. sudo, systemctl, apt-get and chown
+// are stubs, and every path lives in the test's temp directory, so nothing
+// else on the machine is touched. The systemctl stub plays the package's
+// redis-server@<name> template unit (and redis-server for the shared Redis).
 
 type redisSandbox struct {
-	t     *testing.T
-	dir   string
-	bin   string
-	port  int
-	paths Paths
+	t      *testing.T
+	dir    string
+	bin    string
+	layout Layout
 }
 
 func newRedisSandbox(t *testing.T) *redisSandbox {
@@ -32,43 +34,28 @@ func newRedisSandbox(t *testing.T) *redisSandbox {
 	if binDir == "" {
 		t.Skip("set LANDFALL_REDIS_BIN_DIR to run against a real Redis")
 	}
-
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
+	s := &redisSandbox{t: t, dir: dir, bin: filepath.Join(dir, "bin")}
+	s.layout = Layout{
+		EtcDir:     filepath.Join(dir, "etc"),
+		LibDir:     filepath.Join(dir, "lib"),
+		LogDir:     filepath.Join(dir, "log"),
+		RunDir:     filepath.Join(dir, "run"),
+		AdminDir:   filepath.Join(dir, "landfall"),
+		SharedPort: freePort(t),
+	}
+	for _, d := range []string{s.bin, s.layout.EtcDir, s.layout.LibDir, s.layout.LogDir, s.layout.RunDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, name := range []string{"redis-server", "redis-cli"} {
-		if err := os.Symlink(filepath.Join(binDir, name), filepath.Join(bin, name)); err != nil {
+		if err := os.Symlink(filepath.Join(binDir, name), filepath.Join(s.bin, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	s := &redisSandbox{
-		t:    t,
-		dir:  dir,
-		bin:  bin,
-		port: port,
-		paths: Paths{
-			Conf:      filepath.Join(dir, "redis.conf"),
-			ACLFile:   filepath.Join(dir, "users.acl"),
-			AdminFile: filepath.Join(dir, "landfall", "redis-admin-password"),
-		},
-	}
-
-	// A bind line every supported Redis accepts (6.0 has no "-" prefix).
-	conf := fmt.Sprintf("port %d\nbind 127.0.0.1\ndir %s\ndaemonize yes\npidfile %s\nlogfile %s\nsave \"\"\n",
-		port, dir, s.pidFile(), filepath.Join(dir, "redis.log"))
-	s.write(s.paths.Conf, conf, 0o644)
-
-	s.write(filepath.Join(bin, "sudo"), `#!/bin/bash
+	s.write(filepath.Join(s.bin, "sudo"), `#!/bin/bash
 while [ $# -gt 0 ]; do
   case "$1" in
     -u) shift 2 ;;
@@ -77,39 +64,67 @@ while [ $# -gt 0 ]; do
   esac
 done
 exec "$@"
-`, 0o755)
-	s.write(filepath.Join(bin, "apt-get"), "#!/bin/bash\nexit 0\n", 0o755)
-	s.write(filepath.Join(bin, "chown"), "#!/bin/bash\nexit 0\n", 0o755)
-	s.write(filepath.Join(bin, "systemctl"), fmt.Sprintf(`#!/bin/bash
-PIDFILE=%s
-CONF=%s
-running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+`)
+	s.write(filepath.Join(s.bin, "apt-get"), "#!/bin/bash\nexit 0\n")
+	s.write(filepath.Join(s.bin, "chown"), "#!/bin/bash\nexit 0\n")
+	s.write(filepath.Join(s.bin, "systemctl"), fmt.Sprintf(`#!/bin/bash
+ETC=%s
+CMD=$1; shift
+[ "${1:-}" = --quiet ] && shift
+UNIT=${1:-}
+case "$CMD" in
+  cat) [ "$UNIT" = redis-server@.service ]; exit ;;
+  enable|disable|daemon-reload) exit 0 ;;
+esac
+case "$UNIT" in
+  redis-server@*) CONF="$ETC/redis-${UNIT#redis-server@}.conf" ;;
+  redis-server) CONF="$ETC/redis.conf" ;;
+  *) exit 1 ;;
+esac
+PIDFILE=$(awk '$1 == "pidfile" { print $2 }' "$CONF" 2>/dev/null)
+running() { [ -n "$PIDFILE" ] && [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 stop() {
   if running; then
-    PID=$(cat "$PIDFILE")
-    kill "$PID"
-    while kill -0 "$PID" 2>/dev/null; do sleep 0.1; done
+    PID=$(cat "$PIDFILE"); kill "$PID"
+    while kill -0 "$PID" 2>/dev/null; do sleep 0.05; done
   fi
 }
-[ "${2:-}" = "redis-server" ] || exit 1
-case "$1" in
-  restart) stop; redis-server "$CONF" ;;
-  start) running || redis-server "$CONF" ;;
+start() { mkdir -p "$(dirname "$PIDFILE")"; redis-server "$CONF" --daemonize yes --supervised no; }
+case "$CMD" in
+  start) running || start ;;
+  restart) stop; start ;;
   stop) stop ;;
   is-active) running && echo active ;;
-  *) exit 0 ;;
+  *) exit 1 ;;
 esac
-`, util.ShellQuote(s.pidFile()), util.ShellQuote(s.paths.Conf)), 0o755)
+`, util.ShellQuote(s.layout.EtcDir)))
 
-	t.Cleanup(func() { _, _ = s.sh("systemctl stop redis-server") })
+	t.Cleanup(func() {
+		confs, _ := filepath.Glob(filepath.Join(s.layout.EtcDir, "redis*.conf"))
+		for _, c := range confs {
+			unit := "redis-server" // redis.conf: the shared Redis
+			if base := filepath.Base(c); strings.HasPrefix(base, "redis-") {
+				unit = "redis-server@" + strings.TrimSuffix(strings.TrimPrefix(base, "redis-"), ".conf")
+			}
+			_, _ = s.sh("systemctl stop " + unit)
+		}
+	})
 	return s
 }
 
-func (s *redisSandbox) pidFile() string { return filepath.Join(s.dir, "redis.pid") }
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
 
-func (s *redisSandbox) write(path, content string, mode os.FileMode) {
+func (s *redisSandbox) write(path, content string) {
 	s.t.Helper()
-	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		s.t.Fatal(err)
 	}
 }
@@ -122,28 +137,40 @@ func (s *redisSandbox) sh(script string) (string, error) {
 	return string(out), err
 }
 
-// bootstrap runs the bootstrap script and returns the result file's values.
-func (s *redisSandbox) bootstrap(reset bool) map[string]string {
-	s.t.Helper()
-	result := filepath.Join(s.dir, "result.env")
-	_ = os.Remove(result)
-	out, err := s.sh(buildBootstrapScript(s.paths, "app_prod", s.port, 0, result, reset))
-	if err != nil {
-		s.t.Fatalf("bootstrap failed: %v\n%s", err, out)
+func (s *redisSandbox) params(env, user string, port int) bootstrapParams {
+	return bootstrapParams{
+		Layout: s.layout, EnvName: env, Instance: "app-" + env, User: user, Port: port,
+		Maxmemory: "64mb", Policy: "noeviction", ResultPath: filepath.Join(s.dir, "result-"+env+".env"),
 	}
-	raw, err := os.ReadFile(result)
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return util.ParseEnvFile(string(raw))
 }
 
-// cli runs redis-cli. "-u <redis URL>" is turned into --user/--pass/-n,
-// because redis-cli 6.0 ignores the username in a URL and would try the
-// password against the default user. (App client libraries read it fine.)
-func (s *redisSandbox) cli(args ...string) string {
+// bootstrapRaw runs the bootstrap script and returns the result file's
+// values (if any), the script output and its error.
+func (s *redisSandbox) bootstrapRaw(p bootstrapParams) (map[string]string, string, error) {
 	s.t.Helper()
-	full := []string{"--no-auth-warning", "-p", fmt.Sprint(s.port)}
+	out, err := s.sh(buildBootstrapScript(p))
+	raw, readErr := os.ReadFile(p.ResultPath)
+	if readErr != nil {
+		return nil, out, err
+	}
+	return util.ParseEnvFile(string(raw)), out, err
+}
+
+func (s *redisSandbox) bootstrap(p bootstrapParams) map[string]string {
+	s.t.Helper()
+	vars, out, err := s.bootstrapRaw(p)
+	if err != nil {
+		s.t.Fatalf("bootstrap %s failed: %v\n%s", p.Instance, err, out)
+	}
+	return vars
+}
+
+// cli runs redis-cli against port. "-u <redis URL>" is turned into
+// --user/--pass/-p/-n, because redis-cli 6.0 ignores the username in a URL
+// and would try the password against the default user.
+func (s *redisSandbox) cli(port int, args ...string) string {
+	s.t.Helper()
+	full := []string{"--no-auth-warning", "-p", fmt.Sprint(port)}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-u" && i+1 < len(args) {
 			u, err := url.Parse(args[i+1])
@@ -151,7 +178,7 @@ func (s *redisSandbox) cli(args ...string) string {
 				s.t.Fatalf("bad redis URL %q: %v", args[i+1], err)
 			}
 			pass, _ := u.User.Password()
-			full = append(full, "--user", u.User.Username(), "--pass", pass)
+			full = append(full, "--user", u.User.Username(), "--pass", pass, "-p", u.Port())
 			if db := strings.TrimPrefix(u.Path, "/"); db != "" {
 				full = append(full, "-n", db)
 			}
@@ -160,22 +187,25 @@ func (s *redisSandbox) cli(args ...string) string {
 		}
 		full = append(full, args[i])
 	}
-	cmd := exec.Command(filepath.Join(s.bin, "redis-cli"), full...)
-	out, _ := cmd.CombinedOutput()
+	out, _ := exec.Command(filepath.Join(s.bin, "redis-cli"), full...).CombinedOutput()
 	return strings.TrimSpace(string(out))
 }
 
-// appRules are the ACL rules an older Landfall gave an app user, in a form
-// this Redis accepts: channel rules (&*) only exist from Redis 6.2.
-func (s *redisSandbox) appRules() []string {
+// admin runs redis-cli as the instance's admin user.
+func (s *redisSandbox) admin(instance string, port int, args ...string) string {
 	s.t.Helper()
-	if major, minor := s.version(); major > 6 || (major == 6 && minor >= 2) {
-		return []string{"~*", "&*", "+@all"}
+	pass, err := os.ReadFile(s.layout.Instance(instance).AdminFile)
+	if err != nil {
+		s.t.Fatal(err)
 	}
-	return []string{"~*", "+@all"}
+	return s.cli(port, append([]string{"-a", string(pass)}, args...)...)
 }
 
-// version returns the sandbox Redis server's major and minor version.
+func (s *redisSandbox) pid(instance string) string {
+	raw, _ := os.ReadFile(s.layout.Instance(instance).PidFile)
+	return strings.TrimSpace(string(raw))
+}
+
 func (s *redisSandbox) version() (major, minor int) {
 	s.t.Helper()
 	out, err := exec.Command(filepath.Join(s.bin, "redis-server"), "--version").Output()
@@ -192,364 +222,302 @@ func (s *redisSandbox) version() (major, minor int) {
 	return major, minor
 }
 
-func (s *redisSandbox) pid() string {
-	raw, _ := os.ReadFile(s.pidFile())
-	return strings.TrimSpace(string(raw))
+// appRules are the ACL rules an older Landfall gave an app user on the
+// shared Redis: channel rules (&*) only exist from Redis 6.2.
+func (s *redisSandbox) appRules() []string {
+	if major, minor := s.version(); major > 6 || (major == 6 && minor >= 2) {
+		return []string{"~*", "&*", "+@all"}
+	}
+	return []string{"~*", "+@all"}
 }
 
-func (s *redisSandbox) confCount(prefix string) int {
-	raw, _ := os.ReadFile(s.paths.Conf)
-	count := 0
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(line, prefix) {
-			count++
-		}
-	}
-	return count
-}
-
-func TestBootstrapAgainstRealRedis(t *testing.T) {
-	s := newRedisSandbox(t)
-
-	// --- first run on a fresh Redis ---
-	first := s.bootstrap(false)
-	if first["CREATED"] != "true" || first["DEFAULT_LOCKED"] != "true" {
-		t.Fatalf("first run: unexpected result %v", first)
-	}
-	url := first["REDIS_URL"]
-	if !strings.HasPrefix(url, "redis://app_prod:") {
-		t.Fatalf("first run: missing REDIS_URL in %v", first)
-	}
-
-	if got := s.cli("ping"); !strings.Contains(got, "NOAUTH") {
-		t.Fatalf("default user must need a password now, got %q", got)
-	}
-	if got := s.cli("-u", url, "ping"); got != "PONG" {
-		t.Fatalf("app user cannot log in: %q", got)
-	}
-	if got := s.cli("-u", url, "set", "k", "v"); got != "OK" {
-		t.Fatalf("app user cannot write: %q", got)
-	}
-	// What client libraries send while connecting must still be allowed.
-	// (CLIENT SETINFO only exists from Redis 7.2, so just rule out a permission error.)
-	if got := s.cli("-u", url, "CLIENT", "SETNAME", "landfall-test"); got != "OK" {
-		t.Fatalf("app user cannot run CLIENT SETNAME: %q", got)
-	}
-	// Each cli call is a new, unnamed connection, so GETNAME returns nothing;
-	// only a permission error matters here.
-	if got := s.cli("-u", url, "CLIENT", "GETNAME"); strings.Contains(got, "NOPERM") {
-		t.Fatalf("app user cannot run CLIENT GETNAME: %q", got)
-	}
-	if got := s.cli("-u", url, "CLIENT", "ID"); strings.Contains(got, "NOPERM") || got == "" {
-		t.Fatalf("app user cannot run CLIENT ID: %q", got)
-	}
-	// Before 7.0 the rest of CLIENT stays admin-only (SETINFO does not exist
-	// there; clients ignore its error). From 7.0 SETINFO is in @connection.
-	if major, _ := s.version(); major >= 7 {
-		if got := s.cli("-u", url, "CLIENT", "SETINFO", "lib-name", "landfall-test"); strings.Contains(got, "NOPERM") {
-			t.Fatalf("app user must be allowed to run CLIENT SETINFO: %q", got)
-		}
-	}
-	// Other CLIENT subcommands can disconnect or spy on other apps.
-	if got := s.cli("-u", url, "CLIENT", "KILL", "ID", "999999"); !strings.Contains(got, "NOPERM") {
-		t.Fatalf("app user must not be allowed to run CLIENT KILL, got %q", got)
-	}
-	for _, admin := range [][]string{{"ACL", "LIST"}, {"CONFIG", "GET", "aclfile"}, {"ACL", "SETUSER", "default", "nopass"}} {
-		if got := s.cli(append([]string{"-u", url}, admin...)...); !strings.Contains(got, "NOPERM") {
-			t.Fatalf("app user must not be allowed to run %v, got %q", admin, got)
-		}
-	}
-
-	info, err := os.Stat(s.paths.AdminFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("admin password file mode is %v, want 0600", info.Mode().Perm())
-	}
-	if s.confCount("aclfile ") != 1 {
-		t.Fatalf("expected exactly one aclfile line in redis.conf")
-	}
-	if s.confCount("bind ") != 1 || s.confCount("bind 127.0.0.1") != 1 {
-		t.Fatalf("a loopback-only bind line must be left as it was")
-	}
-
-	// --- users survive a Redis restart ---
-	if out, err := s.sh("systemctl restart redis-server"); err != nil {
-		t.Fatalf("restart: %v\n%s", err, out)
-	}
-	waitForRedis(t, s)
-	if got := s.cli("-u", url, "ping"); got != "PONG" {
-		t.Fatalf("app user lost after restart: %q", got)
-	}
-	if got := s.cli("ping"); !strings.Contains(got, "NOAUTH") {
-		t.Fatalf("default user lost its password after restart: %q", got)
-	}
-
-	// --- second run changes nothing and does not restart Redis ---
-	pidBefore := s.pid()
-	second := s.bootstrap(false)
-	if second["CREATED"] != "false" || second["PASSWORD_ROTATED"] != "false" || second["DEFAULT_LOCKED"] != "false" || second["REDIS_URL"] != "" {
-		t.Fatalf("second run should be a no-op, got %v", second)
-	}
-	if s.pid() != pidBefore {
-		t.Fatal("second run restarted Redis")
-	}
-	if s.confCount("aclfile ") != 1 {
-		t.Fatal("second run added another aclfile line")
-	}
-	if got := s.cli("-u", url, "ping"); got != "PONG" {
-		t.Fatalf("existing password stopped working after a no-op run: %q", got)
-	}
-
-	// --- reset rotates the app password ---
-	third := s.bootstrap(true)
-	newURL := third["REDIS_URL"]
-	if third["PASSWORD_ROTATED"] != "true" || newURL == "" || newURL == url {
-		t.Fatalf("reset should produce a new URL, got %v", third)
-	}
-	if got := s.cli("-u", newURL, "ping"); got != "PONG" {
-		t.Fatalf("new password does not work: %q", got)
-	}
-	// redis-cli 7 reports WRONGPASS; 6.0 prints "AUTH failed" and then fails
-	// the command unauthenticated (NOAUTH). Either way it must not answer.
-	if got := s.cli("-u", url, "ping"); got == "PONG" || !(strings.Contains(got, "WRONGPASS") || strings.Contains(got, "AUTH failed")) {
-		t.Fatalf("old password must stop working, got %q", got)
-	}
-
-	// --- status reports the hardened state ---
-	status, err := s.sh(buildStatusScript(s.paths, "app_prod", s.port, 0))
-	if err != nil {
-		t.Fatalf("status failed: %v\n%s", err, status)
-	}
-	for _, want := range []string{
-		"Ping (as admin):\nPONG",
-		"Default user password-protected:\n  yes",
-		"ACL user exists:\n  yes",
-		"ACL users persisted (aclfile):\n  yes",
-	} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("status missing %q:\n%s", want, status)
-		}
-	}
-
-	// --- a locked default user without the admin file is reported, not guessed ---
-	if err := os.Remove(s.paths.AdminFile); err != nil {
-		t.Fatal(err)
-	}
-	out, err := s.sh(buildBootstrapScript(s.paths, "app_prod", s.port, 0, filepath.Join(s.dir, "result.env"), false))
-	if err == nil || !strings.Contains(out, "does not know") {
-		t.Fatalf("expected a clear failure when the admin password is unknown, got err=%v\n%s", err, out)
-	}
-}
-
-// An existing server whose app user was created by an older Landfall (open
-// default user, no aclfile, user only in memory) must be upgraded in place
-// without changing the app's password.
-func TestBootstrapUpgradesExistingRedis(t *testing.T) {
-	s := newRedisSandbox(t)
-	if out, err := s.sh("systemctl start redis-server"); err != nil {
-		t.Fatalf("start: %v\n%s", err, out)
-	}
-	waitForRedis(t, s)
-
-	// What a pre-fix bootstrap left behind once the aclfile is configured:
-	// simulate by adding the aclfile first, then the user with full rights.
-	if err := os.WriteFile(s.paths.ACLFile, nil, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	conf, _ := os.ReadFile(s.paths.Conf)
-	s.write(s.paths.Conf, string(conf)+"aclfile "+s.paths.ACLFile+"\n", 0o644)
-	if out, err := s.sh("systemctl restart redis-server"); err != nil {
-		t.Fatalf("restart: %v\n%s", err, out)
-	}
-	waitForRedis(t, s)
-	if got := s.cli(append([]string{"ACL", "SETUSER", "app_prod", "on", ">oldpassword"}, s.appRules()...)...); got != "OK" {
-		t.Fatalf("setup: %q", got)
-	}
-	oldURL := fmt.Sprintf("redis://app_prod:oldpassword@127.0.0.1:%d/0", s.port)
-
-	pidBefore := s.pid()
-	result := s.bootstrap(false)
-	if result["CREATED"] != "false" || result["PASSWORD_ROTATED"] != "false" || result["DEFAULT_LOCKED"] != "true" {
-		t.Fatalf("unexpected result %v", result)
-	}
-	if s.pid() != pidBefore {
-		t.Fatal("upgrade restarted Redis although the config was already correct")
-	}
-	if got := s.cli("-u", oldURL, "ping"); got != "PONG" {
-		t.Fatalf("the app's existing password must keep working: %q", got)
-	}
-	if got := s.cli("-u", oldURL, "ACL", "LIST"); !strings.Contains(got, "NOPERM") {
-		t.Fatalf("the app user should have lost admin commands, got %q", got)
-	}
-	if got := s.cli("ping"); !strings.Contains(got, "NOAUTH") {
-		t.Fatalf("default user must need a password now, got %q", got)
-	}
-}
-
-func waitForRedis(t *testing.T, s *redisSandbox) {
-	t.Helper()
-	out, err := s.sh(fmt.Sprintf(`for _ in $(seq 1 40); do redis-cli -p %d ping 2>&1 | grep -qE 'PONG|NOAUTH' && exit 0; sleep 0.25; done; exit 1`, s.port))
-	if err != nil {
-		t.Fatalf("redis did not come up: %s", out)
-	}
-}
-
-// bootstrapRaw runs the bootstrap script for user and returns the result
-// file's values (if any), the script output and its error.
-func (s *redisSandbox) bootstrapRaw(user string, reset bool) (map[string]string, string, error) {
+// startShared starts a stand-in for the old host-wide Redis, with an open
+// default user as older Landfall versions left it.
+func (s *redisSandbox) startShared() {
 	s.t.Helper()
-	result := filepath.Join(s.dir, "result.env")
-	out, err := s.sh(buildBootstrapScript(s.paths, user, s.port, 0, result, reset))
-	raw, readErr := os.ReadFile(result)
-	if readErr != nil {
-		return nil, out, err
-	}
-	return util.ParseEnvFile(string(raw)), out, err
-}
-
-// A host bootstrapped by an older Landfall keeps its users only in memory (no
-// aclfile). Adding the aclfile restarts Redis, which must not delete them:
-// neither this environment's user nor another environment's.
-func TestBootstrapKeepsInMemoryUsersWhenAddingACLFile(t *testing.T) {
-	s := newRedisSandbox(t)
+	conf := fmt.Sprintf("port %d\nbind 127.0.0.1\ndir %s\npidfile %s\nlogfile %s\nsave \"\"\n",
+		s.layout.SharedPort, s.dir, filepath.Join(s.layout.RunDir, "shared.pid"), filepath.Join(s.layout.LogDir, "shared.log"))
+	s.write(filepath.Join(s.layout.EtcDir, "redis.conf"), conf)
 	if out, err := s.sh("systemctl start redis-server"); err != nil {
-		t.Fatalf("start: %v\n%s", err, out)
+		s.t.Fatalf("start shared: %v\n%s", err, out)
 	}
-	waitForRedis(t, s)
-	for _, u := range []string{"app_prod", "app_staging"} {
-		if got := s.cli(append([]string{"ACL", "SETUSER", u, "on", ">old-" + u}, s.appRules()...)...); got != "OK" {
-			t.Fatalf("setup %s: %q", u, got)
-		}
-	}
-
-	pidBefore := s.pid()
-	vars, out, err := s.bootstrapRaw("app_prod", false)
-	if err != nil {
-		t.Fatalf("bootstrap failed: %v\n%s", err, out)
-	}
-	if s.pid() == pidBefore {
-		t.Fatal("expected Redis to restart to load the new aclfile")
-	}
-	if vars["CREATED"] != "false" || vars["PASSWORD_ROTATED"] != "false" || vars["REDIS_URL"] != "" {
-		t.Fatalf("prod's existing user should have been kept as it was, got %v", vars)
-	}
-	for _, u := range []string{"app_prod", "app_staging"} {
-		url := fmt.Sprintf("redis://%s:old-%s@127.0.0.1:%d/0", u, u, s.port)
-		if got := s.cli("-u", url, "ping"); got != "PONG" {
-			t.Fatalf("%s lost its user or password when Redis restarted: %q", u, got)
-		}
-	}
-	if s.confCount("aclfile ") != 1 {
-		t.Fatal("expected the aclfile to be configured")
-	}
-
-	// And they are now persisted: another restart keeps them.
-	if out, err := s.sh("systemctl restart redis-server"); err != nil {
-		t.Fatalf("restart: %v\n%s", err, out)
-	}
-	waitForRedis(t, s)
-	url := fmt.Sprintf("redis://app_staging:old-app_staging@127.0.0.1:%d/0", s.port)
-	if got := s.cli("-u", url, "ping"); got != "PONG" {
-		t.Fatalf("staging user not persisted: %q", got)
-	}
+	waitFor(s.t, func() bool { return s.cli(s.layout.SharedPort, "ping") == "PONG" })
 }
 
-// Inline "user" lines in redis.conf cannot be combined with an aclfile, so
-// bootstrap must stop before changing anything.
-func TestBootstrapRefusesInlineUsers(t *testing.T) {
-	s := newRedisSandbox(t)
-	conf, _ := os.ReadFile(s.paths.Conf)
-	s.write(s.paths.Conf, string(conf)+"user other on >otherpass ~* +@all\n", 0o644)
-
-	_, out, err := s.bootstrapRaw("app_prod", false)
-	if err == nil || !strings.Contains(out, "defines ACL users inline") {
-		t.Fatalf("expected bootstrap to refuse inline users, got err=%v\n%s", err, out)
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if ok() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if got := s.cli("ping"); got != "PONG" {
-		t.Fatalf("the default user must be left untouched, got %q", got)
-	}
-	if got := s.cli("ACL", "USERS"); strings.Contains(got, "app_prod") {
-		t.Fatalf("no app user may be created, got %q", got)
-	}
+	t.Fatal("timed out waiting")
 }
 
-// If ACL SAVE fails after the app's password was rotated, Redis already uses
-// the new password, so the new URL must still be handed back.
-func TestBootstrapKeepsNewPasswordWhenSaveFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root can write to a read-only directory")
-	}
+func TestInstanceBootstrapAgainstRealRedis(t *testing.T) {
 	s := newRedisSandbox(t)
-	aclDir := filepath.Join(s.dir, "acl")
-	if err := os.MkdirAll(aclDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s.paths.ACLFile = filepath.Join(aclDir, "users.acl")
-	first := s.bootstrap(false)
-	if first["REDIS_URL"] == "" {
+	port := freePort(t)
+	p := s.params("prod", "app_prod", port)
+
+	first := s.bootstrap(p)
+	url := first["REDIS_URL"]
+	if first["CREATED"] != "true" || first["DEFAULT_LOCKED"] != "true" || first["PORT"] != fmt.Sprint(port) || !strings.HasPrefix(url, "redis://app_prod:") {
 		t.Fatalf("first run: %v", first)
 	}
 
-	// ACL SAVE writes a temp file next to the aclfile; make that impossible.
-	if err := os.Chmod(aclDir, 0o555); err != nil {
+	// The instance's config is Landfall's and names its own files.
+	inst := s.layout.Instance("app-prod")
+	conf, err := os.ReadFile(inst.Conf)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(aclDir, 0o755) })
+	for _, want := range []string{fmt.Sprintf("port %d", port), "aclfile " + inst.ACLFile, "dir " + inst.DataDir, "maxmemory 64mb", "maxmemory-policy noeviction"} {
+		if !strings.Contains(string(conf), want) {
+			t.Fatalf("config missing %q:\n%s", want, conf)
+		}
+	}
 
-	vars, out, err := s.bootstrapRaw("app_prod", true)
-	if err == nil || !strings.Contains(out, "ACL SAVE failed") {
-		t.Fatalf("expected ACL SAVE to fail, got err=%v\n%s", err, out)
+	if got := s.cli(port, "ping"); !strings.Contains(got, "NOAUTH") {
+		t.Fatalf("the default user must need a password, got %q", got)
 	}
-	newURL := vars["REDIS_URL"]
-	if newURL == "" || newURL == first["REDIS_URL"] || vars["ACL_SAVED"] != "false" {
-		t.Fatalf("the rotated password must be recorded even though the run failed, got %v", vars)
+	if got := s.cli(port, "-u", url, "set", "k", "v"); got != "OK" {
+		t.Fatalf("app user cannot write: %q", got)
 	}
-	if got := s.cli("-u", newURL, "ping"); got != "PONG" {
-		t.Fatalf("recorded URL does not work: %q", got)
+	// What client libraries send while connecting must still be allowed.
+	if got := s.cli(port, "-u", url, "CLIENT", "SETNAME", "landfall-test"); got != "OK" {
+		t.Fatalf("app user cannot run CLIENT SETNAME: %q", got)
+	}
+	for _, adminCmd := range [][]string{{"ACL", "LIST"}, {"CONFIG", "GET", "maxmemory"}, {"CLIENT", "KILL", "ID", "999999"}} {
+		if got := s.cli(port, append([]string{"-u", url}, adminCmd...)...); !strings.Contains(got, "NOPERM") {
+			t.Fatalf("app user must not run %v, got %q", adminCmd, got)
+		}
+	}
+	if got := s.admin("app-prod", port, "CONFIG", "GET", "maxmemory"); !strings.Contains(got, fmt.Sprint(64*1024*1024)) {
+		t.Fatalf("maxmemory not applied: %q", got)
+	}
+
+	// Users and data survive a restart.
+	if out, err := s.sh("systemctl restart " + inst.Unit); err != nil {
+		t.Fatalf("restart: %v\n%s", err, out)
+	}
+	waitFor(t, func() bool { return s.cli(port, "-u", url, "ping") == "PONG" })
+	if got := s.cli(port, "-u", url, "get", "k"); got != "v" {
+		t.Fatalf("data lost on restart: %q", got)
+	}
+
+	// A second run changes nothing and doesn't restart the instance.
+	pid := s.pid("app-prod")
+	second := s.bootstrap(p)
+	if second["CREATED"] != "false" || second["PASSWORD_ROTATED"] != "false" || second["REDIS_URL"] != "" {
+		t.Fatalf("second run should be a no-op: %v", second)
+	}
+	if s.pid("app-prod") != pid {
+		t.Fatal("a no-op run restarted the instance")
+	}
+
+	// A memory change rewrites the config and restarts it; data is kept.
+	p.Maxmemory = "32mb"
+	s.bootstrap(p)
+	if got := s.admin("app-prod", port, "CONFIG", "GET", "maxmemory"); !strings.Contains(got, fmt.Sprint(32*1024*1024)) {
+		t.Fatalf("new maxmemory not applied: %q", got)
+	}
+	if got := s.cli(port, "-u", url, "get", "k"); got != "v" {
+		t.Fatalf("data lost on a config change: %q", got)
+	}
+
+	// --reset-password rotates.
+	p.Reset = true
+	third := s.bootstrap(p)
+	if third["PASSWORD_ROTATED"] != "true" || third["REDIS_URL"] == url {
+		t.Fatalf("reset: %v", third)
+	}
+	if got := s.cli(port, "-u", third["REDIS_URL"], "ping"); got != "PONG" {
+		t.Fatalf("new password: %q", got)
+	}
+	if got := s.cli(port, "-u", url, "ping"); got == "PONG" {
+		t.Fatal("the old password must stop working")
+	}
+
+	// A different redis.port than the instance's is refused, not applied.
+	p.Reset = false
+	p.Port = freePort(t)
+	if _, out, err := s.bootstrapRaw(p); err == nil || !strings.Contains(out, fmt.Sprintf("listens on port %d", port)) {
+		t.Fatalf("expected a port mismatch error, got err=%v\n%s", err, out)
 	}
 }
 
-// A bind line that listens on every interface is rewritten to loopback, and
-// Redis must still start with the new line (6.0 rejects the "-" prefix).
-func TestBootstrapRewritesPublicBind(t *testing.T) {
+// The point of per-environment instances: environments can't reach each
+// other's data, flush it, or use up its memory.
+func TestEnvironmentsAreIsolated(t *testing.T) {
 	s := newRedisSandbox(t)
-	conf, _ := os.ReadFile(s.paths.Conf)
-	s.write(s.paths.Conf, strings.Replace(string(conf), "bind 127.0.0.1\n", "bind 0.0.0.0\n", 1), 0o644)
+	prodPort, devPort := freePort(t), freePort(t)
+	prod := s.bootstrap(s.params("prod", "app_prod", prodPort))["REDIS_URL"]
+	devParams := s.params("dev", "app_dev", devPort)
+	devParams.Maxmemory = "2mb"
+	dev := s.bootstrap(devParams)["REDIS_URL"]
 
-	vars := s.bootstrap(false)
-	if vars["REDIS_URL"] == "" {
-		t.Fatalf("unexpected result %v", vars)
+	if got := s.cli(prodPort, "-u", prod, "set", "order:1", "paid"); got != "OK" {
+		t.Fatalf("prod write: %q", got)
 	}
-	if s.confCount("bind 0.0.0.0") != 0 || s.confCount("bind 127.0.0.1") != 1 {
-		raw, _ := os.ReadFile(s.paths.Conf)
-		t.Fatalf("bind line not rewritten to loopback:\n%s", raw)
+	// Dev's credentials don't work on prod's instance at all.
+	devOnProd := strings.Replace(dev, fmt.Sprintf(":%d/", devPort), fmt.Sprintf(":%d/", prodPort), 1)
+	if got := s.cli(prodPort, "-u", devOnProd, "get", "order:1"); got == "paid" {
+		t.Fatal("dev's user could read prod's data")
 	}
-	if got := s.cli("-u", vars["REDIS_URL"], "ping"); got != "PONG" {
-		t.Fatalf("Redis is not serving after the bind rewrite: %q", got)
+	// Dev can flush its own instance, nothing else.
+	if got := s.cli(devPort, "-u", dev, "FLUSHALL"); got != "OK" {
+		t.Fatalf("dev FLUSHALL: %q", got)
+	}
+	if got := s.cli(prodPort, "-u", prod, "get", "order:1"); got != "paid" {
+		t.Fatalf("prod's data must survive dev's FLUSHALL, got %q", got)
+	}
+	// Dev filling its memory fails dev's writes (noeviction), not prod's.
+	big := strings.Repeat("x", 512*1024)
+	var full bool
+	for i := 0; i < 20 && !full; i++ {
+		full = strings.Contains(s.cli(devPort, "-u", dev, "set", fmt.Sprintf("big:%d", i), big), "OOM")
+	}
+	if !full {
+		t.Fatal("dev's 2mb limit was never reached")
+	}
+	if got := s.cli(prodPort, "-u", prod, "set", "order:2", "paid"); got != "OK" {
+		t.Fatalf("prod must still accept writes when dev is full, got %q", got)
 	}
 }
 
-// redis.port that doesn't match the server is reported, and nothing is
-// changed. (Slow: bootstrap first waits ~20s for Redis to answer.)
-func TestBootstrapReportsPortMismatch(t *testing.T) {
+func TestBootstrapPicksAndKeepsPort(t *testing.T) {
 	s := newRedisSandbox(t)
-	if out, err := s.sh("systemctl start redis-server"); err != nil {
-		t.Fatalf("start: %v\n%s", err, out)
+	// A range whose first port is taken by an unrelated program.
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	waitForRedis(t, s)
-	conf, _ := os.ReadFile(s.paths.Conf)
+	defer busy.Close()
+	min := busy.Addr().(*net.TCPAddr).Port
 
-	wrong := s.port + 1
-	out, err := s.sh(buildBootstrapScript(s.paths, "app_prod", wrong, 0, filepath.Join(s.dir, "result.env"), false))
-	if err == nil || !strings.Contains(out, fmt.Sprintf("does not answer on port %d", wrong)) || !strings.Contains(out, fmt.Sprintf("sets port %d", s.port)) {
-		t.Fatalf("expected a port mismatch error naming both ports, got err=%v\n%s", err, out)
+	p := s.params("dev", "app_dev", 0)
+	p.PortMin, p.PortMax = min, min+50
+	first := s.bootstrap(p)
+	picked := first["PORT"]
+	if picked == "" || picked == fmt.Sprint(min) {
+		t.Fatalf("must skip the busy port %d, picked %q", min, picked)
 	}
-	if after, _ := os.ReadFile(s.paths.Conf); string(after) != string(conf) {
-		t.Fatalf("redis.conf must not change:\n%s", after)
+	// Kept on the next run, even though it is now "in use" (by itself).
+	if again := s.bootstrap(p); again["PORT"] != picked {
+		t.Fatalf("port changed from %s to %s", picked, again["PORT"])
 	}
-	if got := s.cli("ping"); got != "PONG" {
-		t.Fatalf("the default user must be left untouched, got %q", got)
+	// A second instance gets a different port.
+	q := s.params("staging", "app_staging", 0)
+	q.PortMin, q.PortMax = min, min+50
+	if other := s.bootstrap(q)["PORT"]; other == picked || other == fmt.Sprint(min) {
+		t.Fatalf("second instance picked %s (first has %s, %d is busy)", other, picked, min)
+	}
+}
+
+func TestBootstrapRefusesEnvironmentOnSharedRedis(t *testing.T) {
+	s := newRedisSandbox(t)
+	s.startShared()
+	if got := s.cli(s.layout.SharedPort, append([]string{"ACL", "SETUSER", "app_dev", "on", ">old"}, s.appRules()...)...); got != "OK" {
+		t.Fatalf("setup: %q", got)
+	}
+
+	p := s.params("dev", "app_dev", freePort(t))
+	_, out, err := s.bootstrapRaw(p)
+	if err == nil || !strings.Contains(out, "redis migrate --env dev") {
+		t.Fatalf("bootstrap must point to migrate, got err=%v\n%s", err, out)
+	}
+	if _, err := os.Stat(s.layout.Instance("app-dev").Conf); !os.IsNotExist(err) {
+		t.Fatal("no instance may be created when the environment has data on the shared Redis")
+	}
+
+	// The check reports the environment as not isolated.
+	result := filepath.Join(s.dir, "check")
+	check := "RESULT=" + util.ShellQuote(result) + "\n" +
+		`pass() { echo "$1=PASS|$2" >> "$RESULT"; }; fail() { echo "$1=FAIL|$2" >> "$RESULT"; }; warn() { echo "$1=WARN|$2" >> "$RESULT"; }` + "\n" +
+		CheckScript(s.layout, "app-dev", "app_dev", "dev")
+	if out, err := s.sh(check); err != nil {
+		t.Fatalf("check: %v\n%s", err, out)
+	}
+	if raw, _ := os.ReadFile(result); !strings.Contains(string(raw), "redis=WARN|on the shared Redis") {
+		t.Fatalf("check should warn about the shared Redis:\n%s", raw)
+	}
+
+	// --fresh creates it anyway, empty.
+	p.Fresh = true
+	if vars := s.bootstrap(p); vars["REDIS_URL"] == "" {
+		t.Fatalf("--fresh: %v", vars)
+	}
+}
+
+// Migration: the environment's DB on the shared Redis is copied into its
+// own instance (binary-safe, TTLs kept, odd key names), other environments'
+// DBs are not, and the source is left as it was.
+func TestMigrateCopiesOnlyItsDatabase(t *testing.T) {
+	s := newRedisSandbox(t)
+	s.startShared()
+	shared := s.layout.SharedPort
+	if got := s.cli(shared, append([]string{"ACL", "SETUSER", "app_dev", "on", ">old"}, s.appRules()...)...); got != "OK" {
+		t.Fatalf("setup: %q", got)
+	}
+	for _, cmd := range [][]string{
+		{"-n", "0", "set", "prod:secret", "prod-only"}, // prod's DB: must not be copied
+		{"-n", "1", "set", "session:1", "alice"},
+		{"-n", "1", "hset", "user:1", "name", "Bob", "role", "admin"},
+		{"-n", "1", "rpush", "queue", "a", "b", "c"},
+		{"-n", "1", "set", "ttl:key", "v", "EX", "600"},
+		{"-n", "1", "set", `odd "key" with\back slash`, "1"},
+	} {
+		if got := s.cli(shared, cmd...); got != "OK" && got != "2" && got != "3" {
+			t.Fatalf("setup %v: %q", cmd, got)
+		}
+	}
+
+	if out, err := s.sh(buildMigrateCheckScript(s.layout, "dev", "app-dev", "app_dev", 1)); err != nil || !strings.Contains(out, "Keys to copy from DB 1: 5") {
+		t.Fatalf("migrate check: %v\n%s", err, out)
+	}
+
+	p := s.params("dev", "app_dev", freePort(t))
+	p.Fresh, p.Reset = true, true
+	vars := s.bootstrap(p)
+	port := p.Port
+	url := vars["REDIS_URL"]
+
+	out, err := s.sh(buildCopyScript(s.layout, "app-dev", 1, port, 0))
+	if err != nil || !strings.Contains(out, "Copied 5 key(s)") {
+		t.Fatalf("copy: %v\n%s", err, out)
+	}
+	for args, want := range map[string]string{
+		"get session:1":      "alice",
+		"hget user:1 role":   "admin",
+		"lrange queue 0 -1":  "a\nb\nc",
+		"exists prod:secret": "0",
+	} {
+		if got := s.cli(port, append([]string{"-u", url}, strings.Fields(args)...)...); got != want {
+			t.Errorf("%s: got %q, want %q", args, got, want)
+		}
+	}
+	if got := s.cli(port, "-u", url, "get", `odd "key" with\back slash`); got != "1" {
+		t.Errorf("odd key name: got %q", got)
+	}
+	if ttl := s.cli(port, "-u", url, "ttl", "ttl:key"); ttl == "-1" || ttl == "-2" {
+		t.Errorf("TTL must be kept, got %s", ttl)
+	}
+	// The source keeps everything, for a rollback.
+	if got := s.cli(shared, "-n", "1", "dbsize"); got != "5" {
+		t.Errorf("the shared DB must be left as it was, has %s keys", got)
+	}
+	// Copying again (a re-run after a failure) replaces, doesn't fail.
+	if out, err := s.sh(buildCopyScript(s.layout, "app-dev", 1, port, 0)); err != nil {
+		t.Fatalf("second copy: %v\n%s", err, out)
+	}
+}
+
+func TestMigrateCheckWithNothingToMigrate(t *testing.T) {
+	s := newRedisSandbox(t)
+	s.startShared()
+	out, err := s.sh(buildMigrateCheckScript(s.layout, "dev", "app-dev", "app_dev", 1))
+	if err == nil || !strings.Contains(out, "nothing to migrate") {
+		t.Fatalf("expected nothing to migrate, got err=%v\n%s", err, out)
 	}
 }

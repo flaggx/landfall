@@ -15,16 +15,27 @@ func TestRedisDefaults(t *testing.T) {
 		EnvName: "prod",
 	}
 
-	if cfg.RedisPort() != 6379 {
-		t.Fatalf("expected port 6379, got %d", cfg.RedisPort())
+	// Each environment has its own instance: the port is picked by bootstrap
+	// (0 here), the DB is 0, and prod has no memory limit.
+	if cfg.RedisPort() != 0 {
+		t.Fatalf("expected port 0 (picked on the server), got %d", cfg.RedisPort())
 	}
 	if cfg.RedisDatabase() != 0 {
-		t.Fatalf("expected db 0 for prod, got %d", cfg.RedisDatabase())
+		t.Fatalf("expected db 0, got %d", cfg.RedisDatabase())
+	}
+	if cfg.RedisMaxmemory() != "0" || cfg.RedisMaxmemoryPolicy() != "noeviction" {
+		t.Fatalf("prod: maxmemory %q policy %q", cfg.RedisMaxmemory(), cfg.RedisMaxmemoryPolicy())
+	}
+	if name, err := cfg.RedisInstance(); err != nil || name != "my-app-prod" {
+		t.Fatalf("instance %q, %v", name, err)
 	}
 
 	cfg.EnvName = "dev"
-	if cfg.RedisDatabase() != 1 {
-		t.Fatalf("expected db 1 for dev, got %d", cfg.RedisDatabase())
+	if cfg.RedisDatabase() != 0 || cfg.LegacyRedisDatabase() != 1 {
+		t.Fatalf("dev: db %d, legacy shared db %d", cfg.RedisDatabase(), cfg.LegacyRedisDatabase())
+	}
+	if cfg.RedisMaxmemory() != "128mb" {
+		t.Fatalf("dev: maxmemory %q, want 128mb", cfg.RedisMaxmemory())
 	}
 
 	user, err := cfg.RedisUser()
@@ -66,14 +77,15 @@ func TestRedisCustomConfig(t *testing.T) {
 
 func intPtr(v int) *int { return &v }
 
-// A [redis] table without "database" must keep the per-environment default,
-// so dev does not share prod's DB 0. An explicit 0 must still be honoured.
-func TestRedisDatabaseFromTOML(t *testing.T) {
+// Where an environment's data sits on the old shared instance: a [redis]
+// table without "database" means the per-environment index, so dev did not
+// share prod's DB 0. An explicit value is honoured.
+func TestLegacyRedisDatabaseFromTOML(t *testing.T) {
 	for _, tc := range []struct {
 		name, env, table string
 		want             int
 	}{
-		{"dev, table without database", "dev", "port = 6379", 1},
+		{"dev, table without database", "dev", "maxmemory = \"64mb\"", 1},
 		{"staging, table without database", "staging", `user = "cache"`, 2},
 		{"dev, explicit 0", "dev", "database = 0", 0},
 		{"prod, explicit 4", "prod", "database = 4", 4},
@@ -84,10 +96,56 @@ func TestRedisDatabaseFromTOML(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := &ResolvedConfig{EnvName: tc.env, Environment: env}
-			if got := cfg.RedisDatabase(); got != tc.want {
-				t.Fatalf("RedisDatabase() = %d, want %d", got, tc.want)
+			if got := cfg.LegacyRedisDatabase(); got != tc.want {
+				t.Fatalf("LegacyRedisDatabase() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRedisInstanceName(t *testing.T) {
+	for _, tc := range []struct {
+		project, env, explicit, want string
+		wantErr                      bool
+	}{
+		{"my-webapp", "prod", "", "my-webapp-prod", false},
+		{"My App", "dev", "", "my-app-dev", false}, // spaces and case made safe
+		{"shop.example", "dev", "", "shop-example-dev", false},
+		{"x", "dev", "custom_name", "custom_name", false},
+		{"x", "dev", "Bad Name", "", true},
+		{"!!!", "", "", "", true},
+	} {
+		cfg := &ResolvedConfig{Project: ProjectConfig{Project: Project{Name: tc.project}}, EnvName: tc.env}
+		if tc.explicit != "" {
+			cfg.Environment.Redis = &RedisConfig{Instance: tc.explicit}
+		}
+		got, err := cfg.RedisInstance()
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("%q/%q/%q: got %q, %v; want %q (error %v)", tc.project, tc.env, tc.explicit, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+func TestValidateRedisConfig(t *testing.T) {
+	for _, tc := range []struct {
+		r    RedisConfig
+		frag string
+	}{
+		{RedisConfig{Port: 6379}, "shared Redis"},
+		{RedisConfig{Port: 70000}, "port"},
+		{RedisConfig{Maxmemory: "lots"}, "maxmemory"},
+		{RedisConfig{MaxmemoryPolicy: "lru"}, "maxmemory_policy"},
+		{RedisConfig{Instance: "a b"}, "instance"},
+	} {
+		err := validateRedisConfig("dev", &tc.r)
+		if err == nil || !strings.Contains(err.Error(), tc.frag) {
+			t.Errorf("%+v: err = %v, want it to mention %q", tc.r, err, tc.frag)
+		}
+	}
+	for _, ok := range []RedisConfig{{}, {Port: 6390, Maxmemory: "1GB", MaxmemoryPolicy: "allkeys-lru", Instance: "shop-dev"}, {Maxmemory: "0"}} {
+		if err := validateRedisConfig("dev", &ok); err != nil {
+			t.Errorf("%+v: %v", ok, err)
+		}
 	}
 }
 

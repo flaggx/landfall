@@ -33,20 +33,33 @@ func TestEncodeRedisURL(t *testing.T) {
 	}
 }
 
+func testParams() bootstrapParams {
+	return bootstrapParams{
+		Layout: DefaultLayout, EnvName: "prod", Instance: "my-webapp-prod", User: "app_prod",
+		Maxmemory: "0", Policy: "noeviction", ResultPath: "/tmp/out.env", Reset: true,
+	}
+}
+
 func TestBuildBootstrapScript(t *testing.T) {
-	script := buildBootstrapScript(DefaultPaths, "app_prod", 6379, 0, "/tmp/out.env", true)
+	script := buildBootstrapScript(testParams())
 	for _, needle := range []string{
 		"REDIS_USER='app_prod'",
-		"REDIS_PORT=6379",
-		"REDIS_DB=0",
+		"PORT_SETTING='0'",
+		"REDIS_DB='0'",
 		"RESET_PASSWORD='true'",
+		"INSTANCE='my-webapp-prod'",
+		"UNIT='redis-server@my-webapp-prod'",
+		"CONF='/etc/redis/redis-my-webapp-prod.conf'",
+		"ACL_FILE='/var/lib/redis/my-webapp-prod/users.acl'",
+		"REDIS_ADMIN_FILE='/etc/landfall/redis-admin-my-webapp-prod'",
+		"SHARED_ADMIN_FILE='/etc/landfall/redis-admin-password'",
+		"systemctl cat redis-server@.service",
+		"maxmemory $MAXMEMORY",
+		"maxmemory-policy $POLICY",
 		"ACL SETUSER",
 		"ACL SAVE",
 		"ACL USERS",
-		"aclfile $ACL_FILE",
-		"REDIS_ADMIN_FILE='/etc/landfall/redis-admin-password'",
 		"+@all -@admin",
-		`sudo test -f "$REDIS_CONF"`,
 		"RESULT='/tmp/out.env'",
 	} {
 		if !strings.Contains(script, needle) {
@@ -54,21 +67,42 @@ func TestBuildBootstrapScript(t *testing.T) {
 		}
 	}
 	// ACL GETUSER exits 0 for a missing user, so it must not be the existence check.
-	if strings.Contains(script, `"$REDIS_PORT" ACL GETUSER`) {
-		t.Fatalf("script must not use ACL GETUSER to test for a user\n%s", script)
+	if strings.Contains(script, "rcli ACL GETUSER") {
+		t.Fatalf("script must not use ACL GETUSER to test for a user")
+	}
+	// The body is fixed text; only the header carries values, all quoted.
+	if strings.Contains(bootstrapBody, "%") && strings.Contains(bootstrapBody, "%%") {
+		t.Fatal("the script body is not a format string; it must not contain %%")
 	}
 }
 
-func TestBuildBootstrapScriptIsValidBash(t *testing.T) {
+func TestBuildScriptsAreValidBash(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
 	}
-	script := buildBootstrapScript(DefaultPaths, "app_prod", 6379, 0, "/tmp/out.env", false)
-	cmd := exec.Command(bash, "-n")
-	cmd.Stdin = strings.NewReader(script)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("bash -n failed: %v\n%s", err, out)
+	for name, script := range map[string]string{
+		"bootstrap":     buildBootstrapScript(testParams()),
+		"status":        buildStatusScript(DefaultLayout, "prod", "my-webapp-prod", "app_prod", 0),
+		"check":         "pass() { :; }; fail() { :; }; warn() { :; }\n" + CheckScript(DefaultLayout, "my-webapp-prod", "app_prod", "prod"),
+		"migrate check": buildMigrateCheckScript(DefaultLayout, "prod", "my-webapp-prod", "app_prod", 0),
+		"copy":          buildCopyScript(DefaultLayout, "my-webapp-prod", 1, 6380, 0),
+	} {
+		cmd := exec.Command(bash, "-n")
+		cmd.Stdin = strings.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s: bash -n failed: %v\n%s", name, err, out)
+		}
+	}
+}
+
+// A name with shell syntax can only ever reach the scripts as a quoted value.
+func TestScriptsQuoteValues(t *testing.T) {
+	p := testParams()
+	p.EnvName = "dev$(touch /tmp/pwned)"
+	script := buildBootstrapScript(p)
+	if !strings.Contains(script, "ENV_NAME='dev$(touch /tmp/pwned)'") {
+		t.Fatalf("ENV_NAME must be single-quoted:\n%s", script[:400])
 	}
 }
 
@@ -117,10 +151,12 @@ func TestVersionSnippet(t *testing.T) {
 }
 
 func TestBootstrapScriptChangesPasswordLast(t *testing.T) {
-	script := buildBootstrapScript(DefaultPaths, "app_prod", 6379, 0, "/tmp/out.env", true)
+	script := buildBootstrapScript(testParams())
 	order := []string{
-		"defines ACL users inline",    // refuses inline users before any change
-		"rcli ACL LIST",               // seeds the aclfile before restarting
+		"on_shared_redis; then",       // refuses to drop data on the shared Redis
+		"maxmemory $MAXMEMORY",        // writes the instance's config...
+		`systemctl start "$UNIT"`,     // ...and starts it
+		"ACL SETUSER default",         // locks the default user
 		"rcli CONFIG GET aclfile",     // checks users can be saved...
 		"on resetpass >%s %s",         // ...before the app's password changes
 		"write_result false",          // the new URL is recorded straight away
@@ -134,7 +170,7 @@ func TestBootstrapScriptChangesPasswordLast(t *testing.T) {
 			t.Fatalf("script missing %q", needle)
 		}
 		if i < last {
-			t.Fatalf("%q must come after %q", needle, order[0])
+			t.Fatalf("%q is out of order", needle)
 		}
 		last = i
 	}

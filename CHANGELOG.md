@@ -9,15 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrading
 
-- If a dev, staging or other non-prod environment has a `[redis]` table
-  without `database`, it was given DB 0, the same as prod. It now gets its
-  own default (dev 1, staging 2, others 3), but the DB index is part of the
-  saved `REDIS_URL`, so existing environments keep using DB 0 until you run
-  `landfall redis bootstrap --env <env> --reset-password --save-secret` and
-  redeploy.
-- The first `landfall redis bootstrap` on a server set up by 0.1.x adds an
-  `aclfile` and restarts Redis. Users that only existed in memory are now
-  copied into the new file first, so no environment loses its Redis user.
+- **Redis: each environment now has its own instance** (see Changed). Move
+  every existing environment, prod included, with
+  `landfall redis migrate --env <env>`: it copies the environment's keys and
+  switches the app over, with a few seconds of downtime. Until then
+  `landfall check` warns and `redis bootstrap` refuses to start the
+  environment on an empty instance (`--fresh` does that on purpose).
+  `redis.port = 6379` is no longer allowed: that is the shared Redis.
+
+### Changed
+
+- **Redis: one instance per environment.** `redis bootstrap` runs each
+  environment's Redis as its own `redis-server@<project>-<env>` instance
+  (the `redis-server` package's template unit), with its own port (picked
+  from 6380 up unless `port` is set), data, `aclfile`, admin password and
+  memory limit (`maxmemory`, default 128 MB, no limit for prod;
+  `maxmemory_policy`, default `noeviction`). On the shared Redis every
+  environment could switch to another's DB index, `FLUSHALL` wiped them
+  all, and one environment filling memory evicted another's keys.
+- The `redis.database` default is now 0, since each instance has its own
+  databases.
 
 ### Security
 
@@ -27,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `landfall redis migrate --env <env>`: moves an environment from the shared
+  Redis to its own instance with its data (types, TTLs and key names kept;
+  the shared Redis keeps its copy for a rollback), then switches the app's
+  `REDIS_URL` and restarts it. It refuses to copy a DB index that another
+  environment on the host also uses.
+- `landfall redis bootstrap --fresh` starts an environment on an empty
+  instance even though it still has data on the shared Redis.
 - [templates/cache-handler.js.example](templates/cache-handler.js.example):
   a Next.js cache handler that keeps ISR pages in the app's writable cache
   directory, so regenerated pages survive restarts while the code stays
@@ -49,8 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `REDIS_URL` is saved or printed even when the run fails afterwards.
   Inline `user` lines in `redis.conf` now stop the run before anything
   changes.
-- A `[redis]` table without `database` keeps the per-environment default
-  instead of DB 0 (see Upgrading).
 - A backup whose `pg_dump` fails partway no longer leaves a truncated
   `.dump` that `db list` shows and `db restore` accepts.
 - Deploy paths inside a home directory work with the app user: it gets an
