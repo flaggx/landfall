@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -244,7 +245,7 @@ func (c *Client) RunWithOutput(command string, stdout, stderr io.Writer) (int, e
 }
 
 func (c *Client) RunScript(name, script string) (int, error) {
-	remotePath := filepath.Join("/tmp", name)
+	remotePath := path.Join("/tmp", name)
 	if err := c.UploadFile(remotePath, []byte(script), 0o700); err != nil {
 		return -1, err
 	}
@@ -264,21 +265,40 @@ func (c *Client) UploadFile(remotePath string, content []byte, mode os.FileMode)
 		mode = 0o644
 	}
 
-	go func() {
-		w, _ := session.StdinPipe()
-		defer w.Close()
-		fmt.Fprintf(w, "C0644 %d %s\n", len(content), filepath.Base(remotePath))
-		w.Write(content)
-		fmt.Fprint(w, "\x00")
-	}()
+	// StdinPipe must be set up before Start; calling it from a goroutine
+	// raced Start and could leave a nil writer (and a panic).
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("open scp stdin: %w", err)
+	}
+	var stderr bytes.Buffer
+	session.Stderr = &stderr
 
-	cmd := fmt.Sprintf("scp -t %s", filepath.Dir(remotePath))
+	// Remote paths are always POSIX, whatever OS landfall runs on.
+	cmd := fmt.Sprintf("scp -t %s", shellQuote(path.Dir(remotePath)))
 	if err := session.Start(cmd); err != nil {
 		return fmt.Errorf("start scp upload: %w", err)
 	}
 
+	// The header carries the final mode, so a new file is never created more
+	// permissive than requested (scp applies it before any data is written).
+	writeErr := func() error {
+		defer stdin.Close()
+		if _, err := fmt.Fprintf(stdin, "C%04o %d %s\n", mode.Perm(), len(content), path.Base(remotePath)); err != nil {
+			return err
+		}
+		if _, err := stdin.Write(content); err != nil {
+			return err
+		}
+		_, err := stdin.Write([]byte{0})
+		return err
+	}()
+
 	if err := session.Wait(); err != nil {
-		return fmt.Errorf("upload file: %w", err)
+		return fmt.Errorf("upload file %s: %w %s", remotePath, err, strings.TrimSpace(stderr.String()))
+	}
+	if writeErr != nil {
+		return fmt.Errorf("upload file %s: %w", remotePath, writeErr)
 	}
 
 	chmodSession, err := c.conn.NewSession()
@@ -287,7 +307,8 @@ func (c *Client) UploadFile(remotePath string, content []byte, mode os.FileMode)
 	}
 	defer chmodSession.Close()
 
-	chmodCmd := fmt.Sprintf("chmod %o %s", mode, remotePath)
+	// Still chmod: scp leaves the mode of a file that already existed alone.
+	chmodCmd := fmt.Sprintf("chmod %o %s", mode.Perm(), shellQuote(remotePath))
 	if err := chmodSession.Run(chmodCmd); err != nil {
 		return fmt.Errorf("chmod remote file: %w", err)
 	}
