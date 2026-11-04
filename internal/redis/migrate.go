@@ -242,7 +242,8 @@ BEFORE=$(src DBSIZE)
 DEST_PASS=$(sudo cat "$REDIS_ADMIN_FILE")
 export DEST_PASS DEST_PORT DEST_DB
 # Keys are escaped for redis-cli's quoting (backslash, double quote).
-OUT=$(src --scan --count 1000 | awk '
+# (No --count: the redis-cli of Redis 6.0 and 7.0 rejects it for --scan.)
+OUT=$(src --scan | awk '
   BEGIN {
     pre = "MIGRATE 127.0.0.1 " ENVIRON["DEST_PORT"] " \"\" " ENVIRON["DEST_DB"] " 10000 COPY REPLACE AUTH2 default \"" ENVIRON["DEST_PASS"] "\" KEYS"
   }
