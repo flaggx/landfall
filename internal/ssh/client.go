@@ -2,12 +2,14 @@ package ssh
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,7 +53,13 @@ func New(opts Options) (*Client, error) {
 		return nil, fmt.Errorf("parse ssh key: %w", err)
 	}
 
-	hostKeyCallback, err := trustOnFirstUseCallback()
+	addr := net.JoinHostPort(opts.Host, fmt.Sprintf("%d", opts.Port))
+
+	knownHostsPath, err := ensureKnownHostsFile()
+	if err != nil {
+		return nil, err
+	}
+	hostKeyCallback, hostKeyAlgorithms, err := hostKeyConfig(knownHostsPath, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -61,11 +69,11 @@ func New(opts Options) (*Client, error) {
 		Auth: []gossh.AuthMethod{
 			gossh.PublicKeys(signer),
 		},
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         opts.Timeout,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms,
+		Timeout:           opts.Timeout,
 	}
 
-	addr := net.JoinHostPort(opts.Host, fmt.Sprintf("%d", opts.Port))
 	conn, err := gossh.Dial("tcp", addr, config)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
@@ -79,31 +87,43 @@ func New(opts Options) (*Client, error) {
 	}, nil
 }
 
-// trustOnFirstUseCallback verifies host keys against ~/.ssh/known_hosts,
-// recording keys for hosts seen for the first time and rejecting any host
-// whose key no longer matches a previously recorded entry (equivalent to
-// `ssh -o StrictHostKeyChecking=accept-new`).
-func trustOnFirstUseCallback() (gossh.HostKeyCallback, error) {
+// ensureKnownHostsFile returns the path of ~/.ssh/known_hosts, creating the
+// directory and an empty file if they do not exist yet.
+func ensureKnownHostsFile() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
+		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
 
 	sshDir := filepath.Join(home, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create %s: %w", sshDir, err)
+		return "", fmt.Errorf("create %s: %w", sshDir, err)
 	}
 
 	knownHostsPath := filepath.Join(sshDir, "known_hosts")
 	f, err := os.OpenFile(knownHostsPath, os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("create %s: %w", knownHostsPath, err)
+		return "", fmt.Errorf("create %s: %w", knownHostsPath, err)
 	}
 	f.Close()
+	return knownHostsPath, nil
+}
 
+// hostKeyConfig verifies host keys against knownHostsPath, recording keys for
+// hosts seen for the first time and rejecting any host whose key no longer
+// matches a previously recorded entry (equivalent to
+// `ssh -o StrictHostKeyChecking=accept-new`).
+//
+// It also returns the host key algorithms to negotiate with addr. When
+// known_hosts already has keys for the host, only their types are offered, so
+// the server presents a key we can compare against. Without this, Go may pick
+// e.g. ECDSA while known_hosts only holds the host's ed25519 key, and a
+// perfectly valid server would look like a changed host. A nil list (unknown
+// host) keeps Go's defaults.
+func hostKeyConfig(knownHostsPath, addr string) (gossh.HostKeyCallback, []string, error) {
 	verify, err := knownhosts.New(knownHostsPath)
 	if err != nil {
-		return nil, fmt.Errorf("load %s: %w", knownHostsPath, err)
+		return nil, nil, fmt.Errorf("load %s: %w", knownHostsPath, err)
 	}
 
 	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
@@ -133,7 +153,60 @@ func trustOnFirstUseCallback() (gossh.HostKeyCallback, error) {
 
 		fmt.Fprintf(os.Stderr, "Permanently added '%s' (%s) to the list of known hosts.\n", hostname, key.Type())
 		return nil
-	}, nil
+	}, knownHostAlgorithms(verify, addr), nil
+}
+
+// hostKeyAlgorithmPreference orders the plain host key algorithms we offer
+// when restricting negotiation to the types recorded in known_hosts.
+var hostKeyAlgorithmPreference = []string{
+	gossh.KeyAlgoED25519,
+	gossh.KeyAlgoECDSA256,
+	gossh.KeyAlgoECDSA384,
+	gossh.KeyAlgoECDSA521,
+	gossh.KeyAlgoRSASHA512,
+	gossh.KeyAlgoRSASHA256,
+	gossh.KeyAlgoRSA,
+}
+
+// knownHostAlgorithms returns the host key algorithms matching the key types
+// known_hosts records for addr, or nil if the host is not recorded.
+func knownHostAlgorithms(verify gossh.HostKeyCallback, addr string) []string {
+	// Look the host up with a key that cannot match any entry; the resulting
+	// KeyError lists every recorded key for the host.
+	probe, err := gossh.NewPublicKey(ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)))
+	if err != nil {
+		return nil
+	}
+	var keyErr *knownhosts.KeyError
+	if !errors.As(verify(addr, &net.TCPAddr{}, probe), &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+
+	known := map[string]bool{}
+	for _, k := range keyErr.Want {
+		typ := k.Key.Type()
+		if typ == gossh.KeyAlgoRSA {
+			// An RSA host key can be presented with any of the RSA signature algorithms.
+			known[gossh.KeyAlgoRSASHA512] = true
+			known[gossh.KeyAlgoRSASHA256] = true
+		}
+		known[typ] = true
+	}
+
+	var algos []string
+	for _, algo := range hostKeyAlgorithmPreference {
+		if known[algo] {
+			algos = append(algos, algo)
+			delete(known, algo)
+		}
+	}
+	// Any other recorded types (e.g. security-key host keys), in a stable order.
+	var rest []string
+	for algo := range known {
+		rest = append(rest, algo)
+	}
+	sort.Strings(rest)
+	return append(algos, rest...)
 }
 
 func (c *Client) Close() error {
