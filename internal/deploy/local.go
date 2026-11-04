@@ -18,9 +18,9 @@ import (
 // They are passed without a shell, but a value starting with "-" would still
 // be read as an option, so reject anything outside a conservative set.
 var (
-	safeRefPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/@^~-]*$`)
-	safeHostPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	unsafeNameChars = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+	safeGroupPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
+	safeHostPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	unsafeNameChars  = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 )
 
 // uploadExcludes are never sent to the server and never deleted there.
@@ -35,11 +35,58 @@ var uploadExcludes = []string{
 	"/.next/standalone/.next/cache",
 }
 
+// validateRef accepts what git accepts as a branch, tag or commit name
+// (git check-ref-format's rules, plus the ~ and ^ revision suffixes), so any
+// ref that deployed before keeps deploying. The ref is always passed to git as
+// its own argument locally and shell-quoted on the server; on top of that, a
+// leading "-" (git would read an option) and shell metacharacters are refused.
 func validateRef(ref string) error {
-	if !safeRefPattern.MatchString(ref) || strings.Contains(ref, "..") {
-		return fmt.Errorf("invalid git ref %q", ref)
+	invalid := func(why string) error { return fmt.Errorf("invalid git ref %q: %s", ref, why) }
+	switch {
+	case ref == "" || ref == "@":
+		return invalid("empty")
+	case strings.HasPrefix(ref, "-"):
+		return invalid("must not start with -")
+	case strings.Contains(ref, ".."), strings.Contains(ref, "@{"), strings.Contains(ref, "//"):
+		return invalid(`must not contain "..", "@{" or "//"`)
+	case strings.HasSuffix(ref, "/"), strings.HasSuffix(ref, "."), strings.HasSuffix(ref, ".lock"):
+		return invalid(`must not end with "/", "." or ".lock"`)
+	}
+	for _, r := range ref {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" :?*[\\$`;|&<>'\"()", r) {
+			return invalid(fmt.Sprintf("must not contain %q", r))
+		}
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if strings.HasPrefix(part, ".") {
+			return invalid(`no path component may start with "."`)
+		}
 	}
 	return nil
+}
+
+var shortSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,39}$`)
+
+// fetchRef fetches ref into the build clone and returns its commit. A short
+// commit SHA can't be fetched by name, so for one every branch and tag is
+// fetched and the prefix resolved locally (see fetchRefSnippet).
+func fetchRef(dir, ref string) (string, error) {
+	fetchErr := runLocal(dir, nil, "git", "fetch", "origin", "--", ref)
+	if fetchErr == nil {
+		return localOutput(dir, "git", "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+	}
+	if !shortSHAPattern.MatchString(ref) {
+		return "", fetchErr
+	}
+	fmt.Fprintf(os.Stdout, "Fetching all branches and tags to resolve the short commit SHA %s\n", ref)
+	if err := runLocal(dir, nil, "git", "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"); err != nil {
+		return "", err
+	}
+	commit, err := localOutput(dir, "git", "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil || commit == "" {
+		return "", fmt.Errorf("commit %s not found on origin (or the prefix is ambiguous)", ref)
+	}
+	return commit, nil
 }
 
 func validateLocalBuildTarget(cfg *config.ResolvedConfig) error {
@@ -146,10 +193,7 @@ func buildLocally(cfg *config.ResolvedConfig, ref string) (dir, commit string, e
 	if err := runLocal(dir, nil, "git", "remote", "set-url", "origin", "--", repo); err != nil {
 		return "", "", err
 	}
-	if err := runLocal(dir, nil, "git", "fetch", "origin", "--", ref); err != nil {
-		return "", "", err
-	}
-	commit, err = localOutput(dir, "git", "rev-parse", "FETCH_HEAD^{commit}")
+	commit, err = fetchRef(dir, ref)
 	if err != nil {
 		return "", "", err
 	}
@@ -206,21 +250,57 @@ func verifyServerCommit(client *ssh.Client, cfg *config.ResolvedConfig, built st
 	return nil
 }
 
-// uploadBuild mirrors the build directory onto the server's deploy path.
-func uploadBuild(cfg *config.ResolvedConfig, dir string) error {
-	return runLocal("", nil, "rsync", rsyncArgs(cfg, dir)...)
+// codeGroup returns the group the deployed code belongs to on the server: the
+// app user's group once bootstrap has created it, the deploy user's before.
+// This matches what the permissions step sets.
+func codeGroup(client *ssh.Client, cfg *config.ResolvedConfig) (string, error) {
+	deployUser := shellQuote(cfg.Environment.User)
+	cmd := "id -gn " + deployUser
+	if appUser, err := cfg.AppUser(); err == nil {
+		cmd = fmt.Sprintf("id -gn %s 2>/dev/null || id -gn %s", shellQuote(appUser), deployUser)
+	}
+	out := &bytes.Buffer{}
+	if _, err := client.RunWithOutput(cmd, out, os.Stderr); err != nil {
+		return "", fmt.Errorf("look up the code's group on the server: %w", err)
+	}
+	group := strings.TrimSpace(out.String())
+	if !safeGroupPattern.MatchString(group) {
+		return "", fmt.Errorf("unexpected group name %q on the server", group)
+	}
+	return group, nil
 }
 
-func rsyncArgs(cfg *config.ResolvedConfig, dir string) []string {
+// uploadBuild mirrors the build directory onto the server's deploy path.
+func uploadBuild(cfg *config.ResolvedConfig, dir, group string) error {
+	return runLocal("", nil, "rsync", rsyncArgs(cfg, dir, group)...)
+}
+
+// uploadChmod gives the uploaded code the modes the permissions step sets:
+// directories 750, files group-readable (and group-executable when they are
+// executable), nothing for others. The local build directory is 0700, and
+// rsync would otherwise copy that onto the deploy path.
+const uploadChmod = "Du=rwx,Dg=rx,Do=,Fu+rw,Fg+rX,Fg-w,Fo-rwx"
+
+// rsyncArgs builds the upload command. The server side runs as root (the
+// deploy user has sudo) so it can write every file as deploy:<group> with its
+// final mode straight away. rsync replaces each changed file with a new one,
+// and without this the new files would belong to the deploy user's group, so
+// the running app (which reads the code through its group) could not read
+// them until the permissions step, a window that includes release_command.
+func rsyncArgs(cfg *config.ResolvedConfig, dir, group string) []string {
 	// StrictHostKeyChecking=yes: the Go SSH client has already verified (or
 	// recorded) the host key in known_hosts, so rsync must not accept a new one.
 	sshCommand := fmt.Sprintf("ssh -i '%s' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes", cfg.Global.SSHKeyPath)
 
 	args := []string{
 		"--archive",
-		// Leave group ownership to the permissions step, which gives the code
-		// to the app user's group; local group IDs mean nothing on the server.
+		// Local owners and groups mean nothing on the server; --chown below
+		// sets them.
+		"--no-owner",
 		"--no-group",
+		"--rsync-path=sudo rsync",
+		"--chown=" + cfg.Environment.User + ":" + group,
+		"--chmod=" + uploadChmod,
 		"--compress",
 		"--delete",
 		// Don't let a symlink in the build point outside the deploy path.

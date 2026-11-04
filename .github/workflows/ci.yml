@@ -15,7 +15,30 @@ jobs:
           go-version-file: go.mod
       - name: Install Redis for the integration tests
         run: sudo apt-get update -qq && sudo apt-get install -y -qq redis-server
+      - name: Start PostgreSQL for the integration tests
+        run: sudo systemctl start postgresql
       - name: Contributor checks
         run: make check
+        env:
+          LANDFALL_REDIS_BIN_DIR: /usr/bin
+          # The runner is throwaway: let the Postgres tests change its config.
+          LANDFALL_PG_INTEGRATION: "1"
+
+  # Ubuntu 22.04 ships Redis 6.0, which lacks channel ACL rules (&*) and the
+  # "-" bind prefix. Run the Redis integration tests against it.
+  redis-ubuntu-22-04:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Redis 6.0 (Ubuntu 22.04's package)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq redis-server
+          redis-server --version
+          redis-server --version | grep -q 'v=6\.0\.' || { echo "expected Redis 6.0 on ubuntu-22.04"; exit 1; }
+      - name: Redis integration tests
+        run: go test -v -count=1 ./internal/redis/
         env:
           LANDFALL_REDIS_BIN_DIR: /usr/bin

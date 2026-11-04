@@ -10,6 +10,9 @@ User={{ .User }}
 WorkingDirectory={{ .WorkDir }}/.next/standalone
 Environment=NODE_ENV=production
 Environment=PORT={{ .Port }}
+# Where templates/cache-handler.js.example keeps ISR pages: inside the only
+# directory the app may write to (see ReadWritePaths).
+Environment=LANDFALL_ISR_CACHE_DIR={{ .CacheDir }}/landfall-isr
 # Read by systemd as root, so the file stays readable by the deploy user only.
 EnvironmentFile=-{{ .WorkDir }}/.env.production
 ExecStart=/usr/bin/node server.js
@@ -40,7 +43,9 @@ RestrictSUIDSGID=true
 RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK only lets the app read interface addresses (Node's
+# os.networkInterfaces() throws without it); it is not a raw socket.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 UMask=0027
 
 [Install]

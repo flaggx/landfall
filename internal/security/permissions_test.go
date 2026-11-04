@@ -54,7 +54,7 @@ func TestPermissionsScriptRuns(t *testing.T) {
 	}
 
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\nexec \"$@\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\n[ \"$1\" = -u ] && shift 2\nexec \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,5 +124,70 @@ func TestBuildPermissionsCheckScript(t *testing.T) {
 	}
 	if !strings.Contains(script, util.ShellQuote("true")) {
 		t.Fatal("expected expect env flag")
+	}
+}
+
+// A deploy path inside the deploy user's home: the app user must be allowed
+// through each parent directory it cannot search, and only those.
+func TestPermissionsScriptGrantsTraverse(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	me, err := user.Current()
+	if err != nil {
+		t.Skip(err)
+	}
+
+	root := t.TempDir()
+	home := filepath.Join(root, "home", "deploy")
+	deployPath := filepath.Join(home, "apps", "web")
+	mustWrite(t, filepath.Join(deployPath, "server.js"), 0o644)
+
+	bin := t.TempDir()
+	log := filepath.Join(root, "setfacl.log")
+	// The current user plays the app user. "sudo -u <user> test -x DIR" fails
+	// for the directories in $DENY, standing in for a 0750 home directory.
+	writeStub(t, filepath.Join(bin, "sudo"), `#!/bin/bash
+if [ "$1" = -u ]; then
+  shift 2
+  if [ "$1" = test ] && [ "$2" = -x ]; then
+    for d in $DENY; do [ "$3" = "$d" ] && exit 1; done
+  fi
+fi
+exec "$@"
+`)
+	writeStub(t, filepath.Join(bin, "setfacl"), "#!/bin/sh\necho \"$*\" >> "+util.ShellQuote(log)+"\n")
+
+	cmd := exec.Command(bash, "-c", BuildPermissionsScript(deployPath, me.Username, me.Username))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "HOME="+root, "DENY="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+
+	raw, _ := os.ReadFile(log)
+	want := "-m u:" + me.Username + ":--x " + home + "\n"
+	if string(raw) != want {
+		t.Fatalf("setfacl calls = %q, want %q\n%s", raw, want, out)
+	}
+
+	// Nothing to do when every parent is already searchable.
+	_ = os.Remove(log)
+	cmd = exec.Command(bash, "-c", BuildPermissionsScript(deployPath, me.Username, me.Username))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "HOME="+root, "DENY=")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		raw, _ := os.ReadFile(log)
+		t.Fatalf("setfacl must not run when the path is reachable, got %q", raw)
+	}
+}
+
+func writeStub(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }

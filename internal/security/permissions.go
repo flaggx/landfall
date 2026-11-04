@@ -48,6 +48,33 @@ CACHE_DIR=%s
 # leaves the group unchanged in uutils (Ubuntu 26.04's default).
 DEPLOY_GROUP=$(id -gn "$DEPLOY_USER")
 
+# grant_traverse lets USER reach PATH: every parent directory it cannot
+# search gets an ACL entry allowing USER to pass through (--x: no listing, no
+# reading). A deploy path inside the deploy user's home needs this, since
+# Ubuntu 21.04+ creates homes as 0750, which the app user could not enter.
+# Walks from / down, as a directory is only reachable once its parent is.
+grant_traverse() {
+  local user="$1" target="$2" dir="" part
+  # Split on "/" only, without expanding glob characters in the path.
+  local IFS=/ -
+  set -f
+  for part in $(dirname "$target"); do
+    [ -n "$part" ] || continue
+    dir="$dir/$part"
+    if ! sudo -u "$user" test -x "$dir"; then
+      if ! command -v setfacl >/dev/null 2>&1; then
+        sudo apt-get install -y -qq acl >/dev/null 2>&1 || true
+      fi
+      if ! command -v setfacl >/dev/null 2>&1; then
+        echo "$user cannot reach $target: $dir is not searchable by it, and setfacl (package acl) is not available" >&2
+        exit 1
+      fi
+      sudo setfacl -m "u:$user:--x" "$dir"
+      echo "Allowed $user to pass through $dir (ACL u:$user:--x)"
+    fi
+  done
+}
+
 if [ -d "$DEPLOY_PATH" ]; then
   if [ -n "$APP_USER" ] && id -u "$APP_USER" >/dev/null 2>&1; then
     APP_GROUP=$(id -gn "$APP_USER")
@@ -56,6 +83,7 @@ if [ -d "$DEPLOY_PATH" ]; then
     sudo chown -R "$DEPLOY_USER:$APP_GROUP" "$DEPLOY_PATH"
     sudo find "$DEPLOY_PATH" -path "$DEPLOY_PATH/.env.production" -prune -o ! -type l -exec chmod g+rX,g-w {} +
     sudo chmod 750 "$DEPLOY_PATH"
+    grant_traverse "$APP_USER" "$DEPLOY_PATH"
     if [ -d "$DEPLOY_PATH/.next/standalone" ]; then
       sudo mkdir -p "$CACHE_DIR"
       sudo chown -R "$APP_USER:$APP_GROUP" "$CACHE_DIR"

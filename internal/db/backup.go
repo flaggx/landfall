@@ -42,31 +42,7 @@ func Backup(cfg *config.ResolvedConfig, opts BackupOptions) error {
 
 	fmt.Fprintf(os.Stdout, "Backing up %s on %s → %s\n", dbName, cfg.PostgresSSHHost(), remotePath)
 
-	script := fmt.Sprintf(`
-set -euo pipefail
-DIR=%s
-FILE=%s
-DB=%s
-RETAIN_DAYS=%d
-
-sudo mkdir -p "$DIR"
-sudo chown root:root "$DIR"
-sudo chmod 750 "$DIR"
-
-# Stream the dump straight into the root-only backup directory; a temp file
-# in /tmp would be readable by every user on the host while it is written.
-sudo -u postgres pg_dump -Fc -d "$DB" | sudo tee "$FILE" >/dev/null
-sudo chmod 640 "$FILE"
-sudo test -s "$FILE"
-
-# Prune old dumps
-sudo find "$DIR" -type f -name '*.dump' -mtime +"$RETAIN_DAYS" -delete
-
-sudo ls -lh "$FILE"
-echo "BACKUP_PATH=$FILE"
-`, util.ShellQuote(dir), util.ShellQuote(remotePath), util.ShellQuote(dbName), retain)
-
-	if _, err := client.RunScript("landfall-db-backup.sh", script); err != nil {
+	if _, err := client.RunScript("landfall-db-backup.sh", manualBackupScript(dir, remotePath, dbName, retain)); err != nil {
 		return err
 	}
 
@@ -80,6 +56,44 @@ echo "BACKUP_PATH=$FILE"
 
 	fmt.Fprintln(os.Stdout, "Backup complete.")
 	return nil
+}
+
+// partialDumpCleanup removes partial dumps that an earlier run left behind
+// when it was killed before its EXIT trap could run (e.g. power loss).
+const partialDumpCleanup = `find "$DIR" -type f -name '*.dump.partial' -mmin +1440 -delete`
+
+// manualBackupScript is the script `landfall db backup` runs on the DB host.
+// The dump is written to FILE.partial and only renamed to FILE once pg_dump
+// has succeeded, so a failed run never leaves a truncated *.dump that
+// `db list` would show and `db restore` would accept.
+func manualBackupScript(dir, file, dbName string, retain int) string {
+	return fmt.Sprintf(`
+set -euo pipefail
+DIR=%s
+FILE=%s
+DB=%s
+RETAIN_DAYS=%d
+TMP="$FILE.partial"
+
+sudo mkdir -p "$DIR"
+sudo chown root:root "$DIR"
+sudo chmod 750 "$DIR"
+
+# Stream the dump straight into the root-only backup directory; a temp file
+# in /tmp would be readable by every user on the host while it is written.
+trap 'sudo rm -f "$TMP"' EXIT
+sudo -u postgres pg_dump -Fc -d "$DB" | sudo tee "$TMP" >/dev/null
+sudo chmod 640 "$TMP"
+sudo test -s "$TMP"
+sudo mv "$TMP" "$FILE"
+
+# Prune old dumps
+sudo find "$DIR" -type f -name '*.dump' -mtime +"$RETAIN_DAYS" -delete
+sudo %s
+
+sudo ls -lh "$FILE"
+echo "BACKUP_PATH=$FILE"
+`, util.ShellQuote(dir), util.ShellQuote(file), util.ShellQuote(dbName), retain, partialDumpCleanup)
 }
 
 func ListBackups(cfg *config.ResolvedConfig) error {
@@ -281,15 +295,20 @@ DB=%s
 RETAIN_DAYS=%d
 STAMP=$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
 FILE="$DIR/${DB}_${STAMP}.dump"
+TMP="$FILE.partial"
 mkdir -p "$DIR"
 chmod 750 "$DIR"
-# Write the dump straight into the root-only directory (no temp file in /tmp).
+# Write the dump straight into the root-only directory (no temp file in /tmp),
+# under a .partial name until pg_dump has succeeded.
 umask 027
-sudo -u postgres pg_dump -Fc -d "$DB" > "$FILE"
-chmod 640 "$FILE"
-test -s "$FILE"
+trap 'rm -f "$TMP"' EXIT
+sudo -u postgres pg_dump -Fc -d "$DB" > "$TMP"
+chmod 640 "$TMP"
+test -s "$TMP"
+mv "$TMP" "$FILE"
 find "$DIR" -type f -name '*.dump' -mtime +"$RETAIN_DAYS" -delete
-%s%s`, pingStart, util.ShellQuote(dir), util.ShellQuote(dbName), retain, uploadSnippet, pingEnd)
+%s
+%s%s`, pingStart, util.ShellQuote(dir), util.ShellQuote(dbName), retain, partialDumpCleanup, uploadSnippet, pingEnd)
 }
 
 func uploadBackup(cfg *config.ResolvedConfig, remoteFile string) error {

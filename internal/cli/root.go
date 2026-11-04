@@ -173,7 +173,8 @@ func loadConfig() (*config.ResolvedConfig, error) {
 }
 
 // loadConfigForConnection loads project config without requiring secrets.
-// Use for harden/bootstrap/db/redis/status/logs — those run before secrets exist.
+// Use for harden/bootstrap/db/redis/status/logs — those run before secrets exist —
+// and for check, which reports missing secrets itself.
 func loadConfigForConnection() (*config.ResolvedConfig, error) {
 	return config.LoadWithOptions(envName, projectDir, config.LoadOptions{ResolveSecrets: false})
 }
@@ -235,7 +236,9 @@ func runInit() error {
 				Domain:      devDomain,
 				HealthCheck: fmt.Sprintf("http://127.0.0.1:%d/api/health", devPort),
 				Env: map[string]string{
-					"NODE_ENV":     "development",
+					// Not NODE_ENV=development: that would build and run the
+					// app in Next.js's development mode (see nodeEnvWarning).
+					"APP_ENV":      "development",
 					"DATABASE_URL": "{{secret:dev_db_url}}",
 					"REDIS_URL":    "{{secret:dev_redis_url}}",
 				},

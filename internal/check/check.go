@@ -116,7 +116,10 @@ func runRemoteChecks(client *ssh.Client, cfg *config.ResolvedConfig) ([]Result, 
 	expectEnvFile := len(cfg.Environment.Env) > 0
 	permissionsChecks := security.BuildPermissionsCheckScript(deployPath, cfg.Environment.User, expectEnvFile)
 
-	resultPath := fmt.Sprintf("/tmp/landfall-check-%s.env", cfg.EnvName)
+	resultPath, err := client.TempPath("landfall-check.env")
+	if err != nil {
+		return nil, err
+	}
 	script := fmt.Sprintf(`
 set -euo pipefail
 RESULT=%s
@@ -198,21 +201,7 @@ else
   fail service_sandbox "the app could use sudo or setuid programs (run: landfall bootstrap)"
 fi
 
-# PostgreSQL
-if [ "%s" = "true" ]; then
-  if command -v psql >/dev/null 2>&1 && sudo systemctl is-active postgresql >/dev/null 2>&1; then
-    if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='%s'" | grep -q 1; then
-      pass postgres "database %s exists"
-    else
-      fail postgres "database missing (run: landfall db bootstrap)"
-    fi
-  else
-    fail postgres "not running (run: landfall db bootstrap)"
-  fi
-else
-  skip postgres "not configured"
-fi
-
+%s
 # Redis
 if [ "%s" = "true" ]; then
   if command -v redis-cli >/dev/null 2>&1 && sudo systemctl is-active redis-server >/dev/null 2>&1 || sudo systemctl is-active redis >/dev/null 2>&1; then
@@ -251,15 +240,16 @@ if [ -n "%s" ]; then
 else
   skip health_endpoint "health_check not configured in landfall.toml"
 fi
-
+%s
 chmod 600 "$RESULT"
 `, util.ShellQuote(resultPath), permissionsChecks,
 		util.ShellQuote(deployPath), util.ShellQuote(deployPath),
 		serviceName, serviceName,
 		serviceName, util.ShellQuote(cfg.Environment.User), serviceName,
-		boolString(expectDB), dbName, dbName,
+		postgresCheckScript(cfg, expectDB, dbName),
 		boolString(expectRedis), redisPort, redis.CLIPrelude(redis.DefaultPaths), util.ShellQuote(redisUser), redisUser, redisDB,
-		healthURL, healthURL, healthURL, healthURL)
+		healthURL, healthURL, healthURL, healthURL,
+		isrCacheCheckScript(serviceName))
 
 	if _, err := client.RunScript("landfall-check.sh", script); err != nil {
 		return nil, err
@@ -272,6 +262,61 @@ chmod 600 "$RESULT"
 	_, _ = client.Run(fmt.Sprintf("rm -f %s", util.ShellQuote(resultPath)))
 
 	return parseRemoteResults(string(raw)), nil
+}
+
+// postgresCheckScript checks PostgreSQL from the app server. Co-located, it
+// checks that the service runs and the database exists. On a dedicated DB
+// server (postgres.host), PostgreSQL isn't on this machine, so it checks what
+// the app needs from here instead: that the DB host's port is reachable,
+// i.e. listen_addresses and the DB host's firewall let this server in.
+func postgresCheckScript(cfg *config.ResolvedConfig, expect bool, dbName string) string {
+	if !expect {
+		return "\n# PostgreSQL\nskip postgres \"not configured\"\n"
+	}
+	if cfg.PostgresIsRemote() {
+		return fmt.Sprintf(`
+# PostgreSQL (dedicated DB server)
+PG_HOST=%s
+PG_PORT=%d
+if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$PG_HOST" "$PG_PORT" 2>/dev/null; then
+  pass postgres "reachable at $PG_HOST:$PG_PORT (details: landfall db status)"
+else
+  fail postgres "cannot reach $PG_HOST:$PG_PORT from this server (run: landfall db bootstrap; check the DB host's firewall and postgres.app_host)"
+fi
+`, util.ShellQuote(cfg.PostgresConnectHost()), cfg.PostgresPort())
+	}
+	return fmt.Sprintf(`
+# PostgreSQL
+DB_NAME=%s
+if command -v psql >/dev/null 2>&1 && sudo systemctl is-active postgresql >/dev/null 2>&1; then
+  if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
+    pass postgres "database $DB_NAME exists"
+  else
+    fail postgres "database missing (run: landfall db bootstrap)"
+  fi
+else
+  fail postgres "not running (run: landfall db bootstrap)"
+fi
+`, util.ShellQuote(dbName))
+}
+
+// isrCacheLogPattern matches what Next.js logs when its built-in cache cannot
+// save a regenerated ISR page, which happens under Landfall because the
+// app's code (where that cache writes) is read-only.
+const isrCacheLogPattern = `Failed to update prerender cache|EROFS: read-only file system`
+
+// isrCacheCheckScript warns when the service's log from the last week shows
+// failed ISR cache writes, and points to the cache handler template.
+func isrCacheCheckScript(serviceName string) string {
+	return fmt.Sprintf(`
+# ISR cache: Next.js's built-in cache writes next to the read-only code.
+ISR_FAILURES=$(sudo journalctl -u %s --since "7 days ago" --no-pager -q 2>/dev/null | grep -cE %s || true)
+if [ "${ISR_FAILURES:-0}" -gt 0 ] 2>/dev/null; then
+  warn isr_cache "$ISR_FAILURES failed ISR cache write(s) in 7 days: regenerated pages are lost on restart (use templates/cache-handler.js.example, see README: ISR and the read-only code)"
+else
+  pass isr_cache "no failed ISR cache writes in 7 days"
+fi
+`, util.ShellQuote(serviceName+".service"), util.ShellQuote(isrCacheLogPattern))
 }
 
 func parseRemoteResults(raw string) []Result {

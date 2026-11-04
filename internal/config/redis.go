@@ -3,8 +3,10 @@ package config
 import "fmt"
 
 type RedisConfig struct {
-	Port     int    `toml:"port"`
-	Database int    `toml:"database"`
+	Port int `toml:"port"`
+	// Database is a pointer so an omitted value can be told apart from an
+	// explicit 0: omitted means the per-environment default.
+	Database *int   `toml:"database"`
 	User     string `toml:"user"`
 }
 
@@ -16,8 +18,8 @@ func (c *ResolvedConfig) RedisPort() int {
 }
 
 func (c *ResolvedConfig) RedisDatabase() int {
-	if c.Environment.Redis != nil && c.Environment.Redis.Database >= 0 {
-		return c.Environment.Redis.Database
+	if c.Environment.Redis != nil && c.Environment.Redis.Database != nil {
+		return *c.Environment.Redis.Database
 	}
 	return defaultRedisDatabase(c.EnvName)
 }

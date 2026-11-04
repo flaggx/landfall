@@ -40,6 +40,37 @@ rcli() {
 `, util.ShellQuote(paths.AdminFile))
 }
 
+// versionSnippet sets the parts of the config that differ between Redis
+// versions. Ubuntu 22.04 still ships 6.0:
+//
+//   - CHANNELS is the ACL rule granting every pub/sub channel. Channel rules
+//     (&pattern) only exist from 6.2; 6.0 rejects them as a syntax error and
+//     allows every channel anyway, so there it is empty.
+//   - BIND_LINE listens on loopback only. The "-" prefix (don't fail if ::1 is
+//     unavailable) only exists from 6.2; 6.0 refuses to start with it, so
+//     there it binds IPv4 loopback only.
+//   - CLIENT_RULES re-allows the CLIENT subcommands client libraries send
+//     while connecting (SETNAME, GETNAME, ID). Before 7.0 the whole CLIENT
+//     command is in @admin, so the app user's -@admin would block them; from
+//     7.0 they are in @connection and need nothing extra.
+//
+// An unknown version is treated as modern (7.x defaults to resetchannels, so
+// the channel rule is required there).
+const versionSnippet = `
+REDIS_VERSION=$( (redis-server --version 2>/dev/null || redis-cli --version 2>/dev/null) | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true)
+IFS=. read -r V_MAJOR V_MINOR _ <<<"${REDIS_VERSION:-7.0}"
+CHANNELS='&*'
+BIND_LINE='bind 127.0.0.1 -::1'
+CLIENT_RULES=''
+if [ "${V_MAJOR:-7}" -lt 7 ]; then
+  CLIENT_RULES='+client|setname +client|getname +client|id'
+fi
+if [ "${V_MAJOR:-7}" -lt 6 ] || { [ "${V_MAJOR:-7}" -eq 6 ] && [ "${V_MINOR:-0}" -lt 2 ]; }; then
+  CHANNELS=''
+  BIND_LINE='bind 127.0.0.1'
+fi
+`
+
 func buildBootstrapScript(paths Paths, redisUser string, redisPort, redisDB int, resultPath string, resetPassword bool) string {
 	resetFlag := "false"
 	if resetPassword {
@@ -61,6 +92,8 @@ ACL_FILE=%s
 CREATED=false
 PASSWORD_ROTATED=false
 REDIS_PASS=""
+# Never let a caller read a result left over from an earlier run.
+rm -f "$RESULT"
 
 if command -v apt-get >/dev/null 2>&1; then
   if ! command -v redis-cli >/dev/null 2>&1; then
@@ -74,35 +107,76 @@ fi
 
 sudo systemctl enable redis-server 2>/dev/null || sudo systemctl enable redis 2>/dev/null || true
 sudo systemctl start redis-server 2>/dev/null || sudo systemctl start redis 2>/dev/null
+%s
+# Wait for Redis to answer at all (an auth error counts: it is up).
+wait_for_redis() {
+  for _ in $(seq 1 40); do
+    if redis-cli -p "$REDIS_PORT" ping 2>&1 | grep -qE 'PONG|NOAUTH'; then
+      return 0
+    fi
+    sleep 0.5
+  done
+}
+wait_for_redis
+
+# One Redis serves every environment on the host, so a port that doesn't
+# match is reported rather than changed (that would cut off the others).
+if ! redis-cli -p "$REDIS_PORT" ping 2>&1 | grep -qE 'PONG|NOAUTH'; then
+  CONF_PORT=$(sudo grep -E '^port[[:space:]]+[0-9]+' "$REDIS_CONF" 2>/dev/null | awk '{print $2}' | tail -n 1 || true)
+  echo "Redis does not answer on port $REDIS_PORT (redis.port for this environment)." >&2
+  if [ -n "$CONF_PORT" ] && [ "$CONF_PORT" != "$REDIS_PORT" ]; then
+    echo "$REDIS_CONF sets port $CONF_PORT: set redis.port = $CONF_PORT, or change port in $REDIS_CONF and restart Redis." >&2
+  fi
+  exit 1
+fi
 
 # Ensure Redis only listens locally and keeps ACL users in a file. Without an
 # aclfile, ACL SAVE fails and users created below vanish when Redis restarts.
 # /etc/redis is readable only by the redis user, so test with sudo.
 if sudo test -f "$REDIS_CONF"; then
+  if sudo grep -q '^user ' "$REDIS_CONF"; then
+    # Redis refuses to start with both inline users and an aclfile, and ACL
+    # SAVE cannot persist inline users. Stop before changing anything.
+    echo "$REDIS_CONF defines ACL users inline (\"user ...\" lines). Landfall keeps users in an aclfile:" >&2
+    echo "move those lines into $ACL_FILE, add \"aclfile $ACL_FILE\" to $REDIS_CONF, restart Redis and run this again." >&2
+    exit 1
+  fi
   CONF_CHANGED=false
+  ACLFILE_ADDED=false
   # Leave a bind line alone if it already lists only loopback addresses
-  # (the package default is "bind 127.0.0.1 -::1").
+  # (the package default is "bind 127.0.0.1 -::1", or "bind 127.0.0.1 ::1" on 6.0).
   if ! sudo grep -qE '^bind( -?(127\.0\.0\.1|::1))+[[:space:]]*$' "$REDIS_CONF"; then
     if sudo grep -q '^bind ' "$REDIS_CONF"; then
-      sudo sed -i 's/^bind .*/bind 127.0.0.1 -::1/' "$REDIS_CONF"
+      sudo sed -i "s/^bind .*/${BIND_LINE}/" "$REDIS_CONF"
     else
-      echo 'bind 127.0.0.1 -::1' | sudo tee -a "$REDIS_CONF" >/dev/null
+      echo "$BIND_LINE" | sudo tee -a "$REDIS_CONF" >/dev/null
     fi
     CONF_CHANGED=true
   fi
-  if sudo grep -q '^user ' "$REDIS_CONF"; then
-    # Redis refuses to start with both inline users and an aclfile.
-    echo "redis.conf defines users inline; leaving aclfile unset" >&2
-  elif ! sudo grep -q '^aclfile ' "$REDIS_CONF"; then
-    sudo touch "$ACL_FILE"
-    sudo chown redis:redis "$ACL_FILE"
-    sudo chmod 640 "$ACL_FILE"
-    echo "aclfile $ACL_FILE" | sudo tee -a "$REDIS_CONF" >/dev/null
+  if ! sudo grep -q '^aclfile ' "$REDIS_CONF"; then
+    ACLFILE_ADDED=true
     CONF_CHANGED=true
   fi
-  # Restarting drops any ACL users that were never saved, so only restart
-  # when the config actually changed.
+  # Restarting drops every ACL user that only exists in memory (older Landfall
+  # versions never persisted them, and other environments' users may be among
+  # them), so only restart when the config changed, and keep the users first.
   if [ "$CONF_CHANGED" = true ]; then
+    if [ "$ACLFILE_ADDED" = true ]; then
+      # Seed the new aclfile with the users Redis has now. ACL LIST prints them
+      # in the aclfile format, password hashes included.
+      if ! CURRENT_USERS=$(rcli ACL LIST 2>&1) || printf '%%s\n' "$CURRENT_USERS" | grep -qv '^user '; then
+        echo "could not read Redis's current ACL users, so enabling the aclfile (which restarts Redis) would delete them:" >&2
+        printf '%%s\n' "$CURRENT_USERS" >&2
+        exit 1
+      fi
+      printf '%%s\n' "$CURRENT_USERS" | sudo tee "$ACL_FILE" >/dev/null
+      sudo chown redis:redis "$ACL_FILE"
+      sudo chmod 640 "$ACL_FILE"
+      echo "aclfile $ACL_FILE" | sudo tee -a "$REDIS_CONF" >/dev/null
+    elif ! rcli ACL SAVE 2>&1 | grep -qx OK; then
+      echo "ACL SAVE failed, so restarting Redis to apply $REDIS_CONF would delete unsaved ACL users" >&2
+      exit 1
+    fi
     sudo systemctl restart redis-server 2>/dev/null || sudo systemctl restart redis 2>/dev/null
   fi
 else
@@ -110,13 +184,7 @@ else
   exit 1
 fi
 
-# Wait for Redis to answer at all (an auth error counts: it is up).
-for _ in $(seq 1 40); do
-  if redis-cli -p "$REDIS_PORT" ping 2>&1 | grep -qE 'PONG|NOAUTH'; then
-    break
-  fi
-  sleep 0.5
-done
+wait_for_redis
 
 # Put a password on the built-in "default" user. Out of the box it has none,
 # so any process on the host could read, change or flush every environment's
@@ -129,7 +197,7 @@ if redis-cli -p "$REDIS_PORT" ping 2>/dev/null | grep -qx PONG; then
     ( umask 077; openssl rand -hex 32 | tr -d '\n' | sudo tee "$REDIS_ADMIN_FILE" >/dev/null )
     sudo chmod 600 "$REDIS_ADMIN_FILE"
   fi
-  if ! printf 'ACL SETUSER default on resetpass >%%s ~* &* +@all\n' "$(sudo cat "$REDIS_ADMIN_FILE")" \
+  if ! printf 'ACL SETUSER default on resetpass >%%s ~* %%s +@all\n' "$(sudo cat "$REDIS_ADMIN_FILE")" "$CHANNELS" \
       | redis-cli -p "$REDIS_PORT" | grep -qx OK; then
     echo "could not set a password on Redis's default user" >&2
     exit 1
@@ -159,20 +227,46 @@ elif [ "$RESET_PASSWORD" = true ]; then
   PASSWORD_ROTATED=true
 fi
 
+# Check everything that could stop this run before touching the app's
+# password: once it changes, the running app's password no longer works.
+if ! rcli CONFIG GET aclfile 2>/dev/null | sed -n '2p' | grep -q .; then
+  echo "Redis has no aclfile, so its ACL users cannot be saved (is aclfile set in $REDIS_CONF and Redis restarted?)" >&2
+  exit 1
+fi
+
+# What the app's user may do: all keys, channels and commands except the admin
+# ones (ACL, CONFIG, SHUTDOWN, ...), so the app cannot change users or the
+# server's configuration. Re-asserted on every run.
+APP_RULES="~* ${CHANNELS} +@all -@admin ${CLIENT_RULES}"
+
+write_result() {
+  ( umask 077
+    {
+      echo "CREATED=${CREATED}"
+      echo "PASSWORD_ROTATED=${PASSWORD_ROTATED}"
+      echo "DEFAULT_LOCKED=${DEFAULT_LOCKED:-false}"
+      if [ -n "$REDIS_PASS" ]; then
+        echo "REDIS_URL=redis://${REDIS_USER}:${REDIS_PASS}@127.0.0.1:${REDIS_PORT}/${REDIS_DB}"
+      fi
+      echo "ACL_SAVED=$1"
+    } > "$RESULT" )
+}
+
 if [ "$PASSWORD_ROTATED" = true ]; then
   REDIS_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 32)
-  if ! printf 'ACL SETUSER %%s on resetpass >%%s\n' "$REDIS_USER" "$REDIS_PASS" | rcli | grep -qx OK; then
+  # Password and permissions in one command, so they change together.
+  if ! printf 'ACL SETUSER %%s on resetpass >%%s %%s\n' "$REDIS_USER" "$REDIS_PASS" "$APP_RULES" | rcli | grep -qx OK; then
     echo "could not set the password for Redis user $REDIS_USER" >&2
     exit 1
   fi
-fi
-
-# (Re)assert what the app's user may do on every run: all keys, channels and
-# commands except the admin ones (ACL, CONFIG, SHUTDOWN, ...), so the app
-# cannot change users or the server's configuration.
-if ! rcli ACL SETUSER "$REDIS_USER" on '~*' '&*' +@all -@admin | grep -qx OK; then
-  echo "could not set permissions for Redis user $REDIS_USER" >&2
-  exit 1
+  # Record the new URL right away: Redis already uses this password, so it
+  # must reach the caller even if a later step fails.
+  write_result false
+else
+  if ! printf 'ACL SETUSER %%s on %%s\n' "$REDIS_USER" "$APP_RULES" | rcli | grep -qx OK; then
+    echo "could not set permissions for Redis user $REDIS_USER" >&2
+    exit 1
+  fi
 fi
 
 if ! rcli ACL SAVE | grep -qx OK; then
@@ -180,17 +274,9 @@ if ! rcli ACL SAVE | grep -qx OK; then
   exit 1
 fi
 
-{
-  echo "CREATED=${CREATED}"
-  echo "PASSWORD_ROTATED=${PASSWORD_ROTATED}"
-  echo "DEFAULT_LOCKED=${DEFAULT_LOCKED:-false}"
-  if [ -n "$REDIS_PASS" ]; then
-    echo "REDIS_URL=redis://${REDIS_USER}:${REDIS_PASS}@127.0.0.1:${REDIS_PORT}/${REDIS_DB}"
-  fi
-} > "$RESULT"
-chmod 600 "$RESULT"
+write_result true
 `, util.ShellQuote(resultPath), util.ShellQuote(redisUser), redisPort, redisDB, util.ShellQuote(resetFlag),
-		util.ShellQuote(paths.Conf), util.ShellQuote(paths.ACLFile), CLIPrelude(paths))
+		util.ShellQuote(paths.Conf), util.ShellQuote(paths.ACLFile), CLIPrelude(paths), versionSnippet)
 }
 
 func buildStatusScript(paths Paths, redisUser string, redisPort, redisDB int) string {

@@ -107,7 +107,8 @@ func TestScheduledBackupScript(t *testing.T) {
 	for _, needle := range []string{
 		"DIR='/var/backups/landfall/prod'",
 		"DB='my_webapp_prod'",
-		`pg_dump -Fc -d "$DB" > "$FILE"`,
+		`pg_dump -Fc -d "$DB" > "$TMP"`,
+		`mv "$TMP" "$FILE"`,
 		"umask 027",
 	} {
 		if !strings.Contains(inner, needle) {
@@ -298,5 +299,63 @@ func writeExec(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A pg_dump that fails partway must not leave a truncated *.dump behind, in
+// either the manual or the scheduled backup script.
+func TestBackupScriptsDropPartialDumps(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	scripts := map[string]func(dir string) string{
+		"manual": func(dir string) string {
+			return manualBackupScript(dir, filepath.Join(dir, "app_prod_20261104T030000Z.dump"), "app_prod", 7)
+		},
+		"scheduled": func(dir string) string { return scheduledBackupScript(dir, "app_prod", 7, "", "") },
+	}
+	for name, script := range scripts {
+		for _, tc := range []struct {
+			name, dump string
+			wantErr    bool
+		}{
+			{"dump fails partway", "echo partial-data; exit 1", true},
+			{"dump succeeds", "echo dumpdata", false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				bin := t.TempDir()
+				writeExec(t, filepath.Join(bin, "sudo"), "#!/bin/sh\n[ \"$1\" = -u ] && shift 2\nexec \"$@\"\n")
+				writeExec(t, filepath.Join(bin, "chown"), "#!/bin/sh\nexit 0\n")
+				writeExec(t, filepath.Join(bin, "pg_dump"), "#!/bin/sh\n"+tc.dump+"\n")
+
+				dir := filepath.Join(t.TempDir(), "backups")
+				cmd := exec.Command(bash, "-c", script(dir))
+				cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+				out, err := cmd.CombinedOutput()
+				if (err != nil) != tc.wantErr {
+					t.Fatalf("err = %v, want error %v\n%s", err, tc.wantErr, out)
+				}
+
+				entries, _ := os.ReadDir(dir)
+				var names []string
+				for _, e := range entries {
+					names = append(names, e.Name())
+				}
+				if tc.wantErr {
+					if len(names) != 0 {
+						t.Fatalf("a failed dump left files behind: %v", names)
+					}
+					return
+				}
+				if len(names) != 1 || !strings.HasSuffix(names[0], ".dump") {
+					t.Fatalf("want exactly one finished .dump, got %v", names)
+				}
+				data, _ := os.ReadFile(filepath.Join(dir, names[0]))
+				if string(data) != "dumpdata\n" {
+					t.Fatalf("dump content = %q", data)
+				}
+			})
+		}
 	}
 }
