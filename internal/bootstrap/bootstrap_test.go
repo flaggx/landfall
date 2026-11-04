@@ -52,6 +52,8 @@ func TestSystemdTemplateRenders(t *testing.T) {
 		"RestrictSUIDSGID=true",
 		// os.networkInterfaces() needs a netlink socket.
 		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+		// The ISR cache handler template writes inside the writable cache dir.
+		"Environment=LANDFALL_ISR_CACHE_DIR=/var/www/app/.next/standalone/.next/cache/landfall-isr",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in %s", needle, out)

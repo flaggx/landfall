@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env.production`) instead of `644` followed by a chmod, so secrets are
   never briefly readable by other users on the server.
 
+### Added
+
+- [templates/cache-handler.js.example](templates/cache-handler.js.example):
+  a Next.js cache handler that keeps ISR pages in the app's writable cache
+  directory, so regenerated pages survive restarts while the code stays
+  read-only. The systemd unit sets `LANDFALL_ISR_CACHE_DIR` for it, and
+  `landfall check` warns when the service's log shows failed ISR cache
+  writes. See "ISR and the read-only code" in the README.
+
 ### Fixed
 
 - Connecting no longer fails with a false "REMOTE HOST IDENTIFICATION HAS
@@ -55,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects the result it is restored and Caddy is not reloaded.
 - File uploads no longer risk a panic from a race between setting up the
   scp session and starting it.
+- The app's sandbox allows `AF_NETLINK`, so `os.networkInterfaces()` no
+  longer throws inside the service.
+- Deploys accept every ref git accepts (for example `v1.2.0+build.5`,
+  `feat/a,b`, `_wip`); a leading `-` and shell metacharacters are still
+  refused.
+- With `build = "local"`, uploaded files are written as
+  `deploy:<app group>` with their final modes, so the running app can read
+  new files straight away instead of getting `EACCES` until the end of the
+  deploy.
+- The permissions step runs right after activate, before
+  `release_command`, so new files don't stay unreadable to the app while
+  migrations run.
 
 ## [0.4.0] - 2026-10-23
 

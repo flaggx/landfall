@@ -1,0 +1,207 @@
+// Next.js cache handler for Landfall: keeps ISR pages on disk, outside the
+// app's code.
+//
+// Landfall runs your app with its code read-only (see "ISR and the read-only
+// code" in the README). Next.js's built-in cache writes regenerated ISR pages
+// (revalidate, revalidatePath, revalidateTag) next to the compiled server
+// code in .next/server, so under Landfall those writes fail and the pages only
+// live in memory until the next restart. This handler stores them in the one
+// directory the app may write to instead.
+//
+// Setup:
+//   1. Copy this file to your app's root as cache-handler.js.
+//   2. In next.config.js (or .mjs / .ts):
+//
+//        cacheHandler: require.resolve('./cache-handler.js'),
+//        // ESM config: path.join(import.meta.dirname, 'cache-handler.js')
+//        cacheMaxMemorySize: 0, // this handler is the cache; no copy in memory
+//
+//   3. Deploy. `landfall check` stops warning about failed ISR cache writes.
+//
+// Needs Next.js 14.1 or newer (`cacheHandler`). This handles ISR, route
+// handler responses and fetch() data. It is not used by 'use cache', which has
+// its own `cacheHandlers` (plural) setting.
+//
+// It suits a single app process per environment, which is how Landfall runs
+// your app. If you run several instances, use a shared store instead (see
+// Next.js's Redis cache handler example) so they see each other's
+// revalidations.
+
+const crypto = require('node:crypto')
+const fs = require('node:fs/promises')
+const path = require('node:path')
+
+// Landfall's systemd unit sets LANDFALL_ISR_CACHE_DIR to a directory inside
+// the app's runtime cache. The fallback is the same place relative to the
+// standalone server's working directory.
+const CACHE_DIR =
+  process.env.LANDFALL_ISR_CACHE_DIR ||
+  path.join(process.cwd(), '.next', 'cache', 'landfall-isr')
+const ENTRIES_DIR = path.join(CACHE_DIR, 'entries')
+const TAGS_FILE = path.join(CACHE_DIR, 'tags.json')
+
+// Keep the cache bounded: past this many entries, the least recently written
+// are removed.
+const MAX_ENTRIES = Number(process.env.LANDFALL_ISR_MAX_ENTRIES) || 10000
+const PRUNE_EVERY = 100
+
+const TAGS_HEADER = 'x-next-cache-tags'
+
+// `next build` loads the handler too; the build's own output is seeded
+// separately, so don't write anything then.
+const BUILDING = process.env.NEXT_PHASE === 'phase-production-build'
+
+// Entries contain Buffer (e.g. rscData) and Map (e.g. segmentData) values,
+// which JSON loses unless they are marked and restored. `this[key]` is the
+// value before Buffer#toJSON runs.
+function replacer(key, value) {
+  const raw = this[key]
+  if (Buffer.isBuffer(raw)) return { __landfall: 'Buffer', base64: raw.toString('base64') }
+  if (raw instanceof Map) return { __landfall: 'Map', entries: Array.from(raw.entries()) }
+  return value
+}
+
+function reviver(_key, value) {
+  if (value && typeof value === 'object') {
+    if (value.__landfall === 'Buffer') return Buffer.from(value.base64, 'base64')
+    if (value.__landfall === 'Map') return new Map(value.entries)
+  }
+  return value
+}
+
+// Keys are opaque and may contain "/" or be long, so each entry lives in a
+// file named after the key's hash. The full key is stored inside and checked.
+function entryPath(key) {
+  return path.join(ENTRIES_DIR, crypto.createHash('sha256').update(key).digest('hex') + '.json')
+}
+
+// Write to a temp file and rename, so a crash never leaves half an entry.
+async function writeAtomic(file, contents) {
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`
+  try {
+    await fs.writeFile(tmp, contents)
+    await fs.rename(tmp, file)
+  } catch (err) {
+    await fs.rm(tmp, { force: true })
+    throw err
+  }
+}
+
+// Revalidated tags, as tag -> time of the last revalidation. An entry is
+// stale if any of its tags was revalidated after the entry was written.
+let tagTimes = null
+
+async function loadTagTimes() {
+  if (tagTimes) return tagTimes
+  try {
+    tagTimes = JSON.parse(await fs.readFile(TAGS_FILE, 'utf8'))
+  } catch (err) {
+    if (err.code !== 'ENOENT') warn('could not read the tag index', err)
+    tagTimes = {}
+  }
+  return tagTimes
+}
+
+function entryTags(data, ctx) {
+  const tags = new Set(ctx && Array.isArray(ctx.tags) ? ctx.tags : [])
+  const header = data && data.headers ? data.headers[TAGS_HEADER] : undefined
+  for (const tag of String(header || '').split(',')) {
+    if (tag) tags.add(tag)
+  }
+  return Array.from(tags)
+}
+
+let warned = false
+function warn(message, err) {
+  if (warned) return
+  warned = true
+  console.warn(`[landfall cache handler] ${message} (${CACHE_DIR}):`, err && err.message ? err.message : err)
+}
+
+let setsSincePrune = 0
+async function maybePrune() {
+  if (++setsSincePrune < PRUNE_EVERY) return
+  setsSincePrune = 0
+  try {
+    const names = (await fs.readdir(ENTRIES_DIR)).filter((n) => n.endsWith('.json'))
+    if (names.length <= MAX_ENTRIES) return
+    const stats = await Promise.all(
+      names.map(async (name) => {
+        const file = path.join(ENTRIES_DIR, name)
+        try {
+          return { file, mtime: (await fs.stat(file)).mtimeMs }
+        } catch {
+          return null
+        }
+      }),
+    )
+    const oldest = stats.filter(Boolean).sort((a, b) => a.mtime - b.mtime)
+    await Promise.all(oldest.slice(0, oldest.length - MAX_ENTRIES).map((s) => fs.rm(s.file, { force: true })))
+  } catch (err) {
+    warn('could not prune the cache', err)
+  }
+}
+
+module.exports = class LandfallCacheHandler {
+  constructor(_options) {}
+
+  async get(key) {
+    if (BUILDING) return null
+    let entry
+    try {
+      entry = JSON.parse(await fs.readFile(entryPath(key), 'utf8'), reviver)
+    } catch (err) {
+      // A missing or unreadable entry is a cache miss; Next.js regenerates it.
+      if (err.code !== 'ENOENT') warn('could not read a cache entry', err)
+      return null
+    }
+    if (!entry || entry.key !== key) return null
+    if (entry.expiresAt && Date.now() > entry.expiresAt) {
+      await fs.rm(entryPath(key), { force: true })
+      return null
+    }
+    const times = await loadTagTimes()
+    // >=: an entry written in the same millisecond as a revalidation is
+    // treated as stale (it is simply regenerated).
+    if (entry.tags.some((tag) => (times[tag] || 0) >= entry.lastModified)) return null
+    return { value: entry.value, lastModified: entry.lastModified, tags: entry.tags }
+  }
+
+  async set(key, data, ctx) {
+    if (BUILDING) return
+    try {
+      if (data == null) {
+        await fs.rm(entryPath(key), { force: true })
+        return
+      }
+      const expire = ctx && ctx.cacheControl ? ctx.cacheControl.expire : undefined
+      const entry = {
+        key,
+        value: data,
+        lastModified: Date.now(),
+        tags: entryTags(data, ctx),
+        expiresAt: Number.isFinite(expire) ? Date.now() + expire * 1000 : null,
+      }
+      await writeAtomic(entryPath(key), JSON.stringify(entry, replacer))
+    } catch (err) {
+      // Failing to cache must not fail the request.
+      warn('could not write a cache entry', err)
+      return
+    }
+    await maybePrune()
+  }
+
+  // Throws on failure: a revalidation that silently did nothing would keep
+  // serving stale pages.
+  async revalidateTag(tags) {
+    const list = Array.isArray(tags) ? tags : [tags]
+    const times = await loadTagTimes()
+    const now = Date.now()
+    for (const tag of list) times[tag] = now
+    await writeAtomic(TAGS_FILE, JSON.stringify(times))
+  }
+
+  // Entries live on disk; there is no per-request state to reset.
+  resetRequestCache() {}
+}

@@ -251,7 +251,7 @@ if [ -n "%s" ]; then
 else
   skip health_endpoint "health_check not configured in landfall.toml"
 fi
-
+%s
 chmod 600 "$RESULT"
 `, util.ShellQuote(resultPath), permissionsChecks,
 		util.ShellQuote(deployPath), util.ShellQuote(deployPath),
@@ -259,7 +259,8 @@ chmod 600 "$RESULT"
 		serviceName, util.ShellQuote(cfg.Environment.User), serviceName,
 		boolString(expectDB), dbName, dbName,
 		boolString(expectRedis), redisPort, redis.CLIPrelude(redis.DefaultPaths), util.ShellQuote(redisUser), redisUser, redisDB,
-		healthURL, healthURL, healthURL, healthURL)
+		healthURL, healthURL, healthURL, healthURL,
+		isrCacheCheckScript(serviceName))
 
 	if _, err := client.RunScript("landfall-check.sh", script); err != nil {
 		return nil, err
@@ -272,6 +273,25 @@ chmod 600 "$RESULT"
 	_, _ = client.Run(fmt.Sprintf("rm -f %s", util.ShellQuote(resultPath)))
 
 	return parseRemoteResults(string(raw)), nil
+}
+
+// isrCacheLogPattern matches what Next.js logs when its built-in cache cannot
+// save a regenerated ISR page, which happens under Landfall because the
+// app's code (where that cache writes) is read-only.
+const isrCacheLogPattern = `Failed to update prerender cache|EROFS: read-only file system`
+
+// isrCacheCheckScript warns when the service's log from the last week shows
+// failed ISR cache writes, and points to the cache handler template.
+func isrCacheCheckScript(serviceName string) string {
+	return fmt.Sprintf(`
+# ISR cache: Next.js's built-in cache writes next to the read-only code.
+ISR_FAILURES=$(sudo journalctl -u %s --since "7 days ago" --no-pager -q 2>/dev/null | grep -cE %s || true)
+if [ "${ISR_FAILURES:-0}" -gt 0 ] 2>/dev/null; then
+  warn isr_cache "$ISR_FAILURES failed ISR cache write(s) in 7 days: regenerated pages are lost on restart (use templates/cache-handler.js.example, see README: ISR and the read-only code)"
+else
+  pass isr_cache "no failed ISR cache writes in 7 days"
+fi
+`, util.ShellQuote(serviceName+".service"), util.ShellQuote(isrCacheLogPattern))
 }
 
 func parseRemoteResults(raw string) []Result {

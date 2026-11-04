@@ -10,6 +10,9 @@ User={{ .User }}
 WorkingDirectory={{ .WorkDir }}/.next/standalone
 Environment=NODE_ENV=production
 Environment=PORT={{ .Port }}
+# Where templates/cache-handler.js.example keeps ISR pages: inside the only
+# directory the app may write to (see ReadWritePaths).
+Environment=LANDFALL_ISR_CACHE_DIR={{ .CacheDir }}/landfall-isr
 # Read by systemd as root, so the file stays readable by the deploy user only.
 EnvironmentFile=-{{ .WorkDir }}/.env.production
 ExecStart=/usr/bin/node server.js
