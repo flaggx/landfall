@@ -84,7 +84,13 @@ func Run(cfg *config.ResolvedConfig, opts Options) (*Result, error) {
 				return verifyServerCommit(c, cfg, builtCommit)
 			}},
 			deployStep{"env", func(c *ssh.Client) error { return writeEnvFile(c, cfg) }},
-			deployStep{"upload", func(*ssh.Client) error { return uploadBuild(cfg, buildDir) }},
+			deployStep{"upload", func(c *ssh.Client) error {
+				group, err := codeGroup(c, cfg)
+				if err != nil {
+					return err
+				}
+				return uploadBuild(cfg, buildDir, group)
+			}},
 		)
 	} else {
 		steps = append(steps,
@@ -93,12 +99,18 @@ func Run(cfg *config.ResolvedConfig, opts Options) (*Result, error) {
 			deployStep{"build", func(c *ssh.Client) error { return buildApp(c, cfg) }},
 		)
 	}
-	steps = append(steps, deployStep{"activate", func(c *ssh.Client) error { return activateRelease(c, cfg) }})
+	// Permissions right after activate, before release_command: files the
+	// build and activate wrote belong to the deploy user's group, so the
+	// running app (which reads the code through its group) cannot read them
+	// until this step. Migrations can take minutes; don't make it wait.
+	steps = append(steps,
+		deployStep{"activate", func(c *ssh.Client) error { return activateRelease(c, cfg) }},
+		deployStep{"permissions", func(c *ssh.Client) error { return enforcePermissions(c, cfg) }},
+	)
 	if cfg.Environment.ReleaseCommand != "" {
 		steps = append(steps, deployStep{"release", func(c *ssh.Client) error { return runReleaseCommand(c, cfg) }})
 	}
 	steps = append(steps,
-		deployStep{"permissions", func(c *ssh.Client) error { return enforcePermissions(c, cfg) }},
 		deployStep{"restart", func(c *ssh.Client) error { return restartService(c, serviceName) }},
 		deployStep{"health", func(c *ssh.Client) error { return healthCheck(c, cfg) }},
 	)

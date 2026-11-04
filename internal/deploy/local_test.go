@@ -3,6 +3,7 @@ package deploy
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,12 +31,19 @@ func testConfig() *config.ResolvedConfig {
 }
 
 func TestValidateRef(t *testing.T) {
-	for _, ref := range []string{"main", "feature/login", "v1.2.3", "HEAD~1", "46e7403a756c977756c1c3e881786fcdef710261"} {
+	for _, ref := range []string{
+		"main", "feature/login", "v1.2.3", "HEAD~1", "HEAD^", "46e7403a756c977756c1c3e881786fcdef710261",
+		// Valid in git, refused by the old allow-list (deploys used to break).
+		"v1.2.0+build.5", "feat/a,b", "_wip", "fix=1", "issue#42", "100%", "wow!", "release/2026.11",
+	} {
 		if err := validateRef(ref); err != nil {
 			t.Errorf("ref %q should be accepted: %v", ref, err)
 		}
 	}
-	for _, ref := range []string{"", "-main", "--upload-pack=touch /tmp/x", "main; rm -rf /", "a..b", "$(id)", "main branch"} {
+	for _, ref := range []string{
+		"", "@", "-main", "--upload-pack=touch /tmp/x", "main; rm -rf /", "a..b", "$(id)", "`id`", "main branch",
+		"main\n", "a:b", "a*", "a[0]", "a\\b", "main.lock", "feature/", "main.", "a//b", ".hidden", "a/.b", "main@{1}",
+	} {
 		if err := validateRef(ref); err == nil {
 			t.Errorf("ref %q should be rejected", ref)
 		}
@@ -109,7 +117,7 @@ func TestLocalBuildEnv(t *testing.T) {
 
 func TestRsyncArgs(t *testing.T) {
 	cfg := testConfig()
-	args := rsyncArgs(cfg, "/home/me/.cache/landfall/builds/app-prod/")
+	args := rsyncArgs(cfg, "/home/me/.cache/landfall/builds/app-prod/", "app-prod")
 	joined := strings.Join(args, "\n")
 
 	for _, want := range []string{
@@ -126,6 +134,12 @@ func TestRsyncArgs(t *testing.T) {
 		"/.deploy-meta",
 		"/.next/standalone/.next/cache",
 		"--no-group",
+		"--no-owner",
+		// Written as root, straight as deploy:<code group> with final modes,
+		// so the running app can read every new file at once.
+		"--rsync-path=sudo rsync",
+		"--chown=deploy:app-prod",
+		"--chmod=Du=rwx,Dg=rx,Do=,Fu+rw,Fg+rX,Fg-w,Fo-rwx",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("rsync args missing %q:\n%s", want, joined)
@@ -213,6 +227,48 @@ func TestBuildLocallyEndToEnd(t *testing.T) {
 	if keep := os.Getenv("LANDFALL_E2E_KEEP"); keep != "" {
 		if err := exec.Command("cp", "-a", dir, keep).Run(); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// The upload's --chmod must turn the 0700 local build into what the
+// permissions step expects (750 directories, group-readable files), keeping
+// executables runnable by the app's group. Checked with a real local rsync.
+func TestUploadChmodWithRsync(t *testing.T) {
+	rsync, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync not available")
+	}
+	src := filepath.Join(t.TempDir(), "build")
+	dst := t.TempDir()
+	files := map[string]os.FileMode{"server.js": 0o600, "node_modules/.bin/tool": 0o700}
+	for name, mode := range files {
+		p := filepath.Join(src, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(src, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(rsync, "--archive", "--chmod="+uploadChmod, "--", src+"/", dst+"/").CombinedOutput(); err != nil {
+		t.Fatalf("rsync: %v\n%s", err, out)
+	}
+	for path, want := range map[string]os.FileMode{
+		"":                       0o750,
+		"node_modules":           0o750,
+		"server.js":              0o640,
+		"node_modules/.bin/tool": 0o750,
+	} {
+		info, err := os.Stat(filepath.Join(dst, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%q: mode %o, want %o", path, got, want)
 		}
 	}
 }
