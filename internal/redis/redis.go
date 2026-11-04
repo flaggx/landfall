@@ -69,7 +69,10 @@ func paramsFor(cfg *config.ResolvedConfig, resultPath string, reset, fresh bool)
 // returns the script's result values. If the script failed after a new
 // password was set, the new URL is saved or printed before the error returns.
 func runBootstrap(client *ssh.Client, cfg *config.ResolvedConfig, opts BootstrapOptions) (map[string]string, error) {
-	resultPath := fmt.Sprintf("/tmp/landfall-redis-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
+	resultPath, err := client.TempPath("landfall-redis.env")
+	if err != nil {
+		return nil, err
+	}
 	params, err := paramsFor(cfg, resultPath, opts.ResetPassword, opts.Fresh)
 	if err != nil {
 		return nil, err

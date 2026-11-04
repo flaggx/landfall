@@ -43,7 +43,10 @@ func BootstrapReplica(cfg *config.ResolvedConfig, opts ReplicaOptions) error {
 
 	fmt.Fprintf(os.Stdout, "Configuring replication user on primary %s...\n", primaryHost)
 
-	resultPath := fmt.Sprintf("/tmp/landfall-repl-%s.env", cfg.EnvName)
+	resultPath, err := primary.TempPath("landfall-repl.env")
+	if err != nil {
+		return err
+	}
 	primScript := fmt.Sprintf(`
 set -euo pipefail
 RESULT=%s
