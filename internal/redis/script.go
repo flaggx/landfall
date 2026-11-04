@@ -40,8 +40,8 @@ rcli() {
 `, util.ShellQuote(paths.AdminFile))
 }
 
-// versionSnippet sets the parts of the config that differ before Redis 6.2,
-// which Ubuntu 22.04 still ships (6.0):
+// versionSnippet sets the parts of the config that differ between Redis
+// versions. Ubuntu 22.04 still ships 6.0:
 //
 //   - CHANNELS is the ACL rule granting every pub/sub channel. Channel rules
 //     (&pattern) only exist from 6.2; 6.0 rejects them as a syntax error and
@@ -49,6 +49,10 @@ rcli() {
 //   - BIND_LINE listens on loopback only. The "-" prefix (don't fail if ::1 is
 //     unavailable) only exists from 6.2; 6.0 refuses to start with it, so
 //     there it binds IPv4 loopback only.
+//   - CLIENT_RULES re-allows the CLIENT subcommands client libraries send
+//     while connecting (SETNAME, GETNAME, ID). Before 7.0 the whole CLIENT
+//     command is in @admin, so the app user's -@admin would block them; from
+//     7.0 they are in @connection and need nothing extra.
 //
 // An unknown version is treated as modern (7.x defaults to resetchannels, so
 // the channel rule is required there).
@@ -57,6 +61,10 @@ REDIS_VERSION=$( (redis-server --version 2>/dev/null || redis-cli --version 2>/d
 IFS=. read -r V_MAJOR V_MINOR _ <<<"${REDIS_VERSION:-7.0}"
 CHANNELS='&*'
 BIND_LINE='bind 127.0.0.1 -::1'
+CLIENT_RULES=''
+if [ "${V_MAJOR:-7}" -lt 7 ]; then
+  CLIENT_RULES='+client|setname +client|getname +client|id'
+fi
 if [ "${V_MAJOR:-7}" -lt 6 ] || { [ "${V_MAJOR:-7}" -eq 6 ] && [ "${V_MINOR:-0}" -lt 2 ]; }; then
   CHANNELS=''
   BIND_LINE='bind 127.0.0.1'
@@ -218,7 +226,7 @@ fi
 # What the app's user may do: all keys, channels and commands except the admin
 # ones (ACL, CONFIG, SHUTDOWN, ...), so the app cannot change users or the
 # server's configuration. Re-asserted on every run.
-APP_RULES="~* ${CHANNELS} +@all -@admin"
+APP_RULES="~* ${CHANNELS} +@all -@admin ${CLIENT_RULES}"
 
 write_result() {
   ( umask 077

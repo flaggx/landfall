@@ -80,14 +80,15 @@ func TestVersionSnippet(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	const modernBind = "bind 127.0.0.1 -::1"
+	const oldClient = "+client|setname +client|getname +client|id"
 	for _, tc := range []struct {
-		name, versionOutput, channels, bind string
+		name, versionOutput, channels, bind, client string
 	}{
-		{"redis 6.0 (jammy)", "Redis server v=6.0.16 sha=00000000:0 malloc=jemalloc-5.2.1 bits=64 build=a3fdef44459b3ad6", "", "bind 127.0.0.1"},
-		{"redis 6.2", "Redis server v=6.2.14 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=1", "&*", modernBind},
-		{"redis 7.0 (noble)", "Redis server v=7.0.15 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=1", "&*", modernBind},
-		{"redis 10", "Redis server v=10.0.1 sha=00000000:0 malloc=libc bits=64 build=1", "&*", modernBind},
-		{"unknown version", "", "&*", modernBind},
+		{"redis 6.0 (jammy)", "Redis server v=6.0.16 sha=00000000:0 malloc=jemalloc-5.2.1 bits=64 build=a3fdef44459b3ad6", "", "bind 127.0.0.1", oldClient},
+		{"redis 6.2", "Redis server v=6.2.14 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=1", "&*", modernBind, oldClient},
+		{"redis 7.0 (noble)", "Redis server v=7.0.15 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=1", "&*", modernBind, ""},
+		{"redis 10", "Redis server v=10.0.1 sha=00000000:0 malloc=libc bits=64 build=1", "&*", modernBind, ""},
+		{"unknown version", "", "&*", modernBind, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
@@ -101,15 +102,15 @@ func TestVersionSnippet(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+versionSnippet+`printf '%s|%s' "$CHANNELS" "$BIND_LINE"`)
+			cmd := exec.Command(bash, "-c", "set -euo pipefail\n"+versionSnippet+`printf '%s|%s|%s' "$CHANNELS" "$BIND_LINE" "$CLIENT_RULES"`)
 			// Only the stub and coreutils: no real redis-server or redis-cli.
 			cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("snippet failed: %v\n%s", err, out)
 			}
-			if want := tc.channels + "|" + tc.bind; string(out) != want {
-				t.Fatalf("CHANNELS|BIND_LINE = %q, want %q", out, want)
+			if want := tc.channels + "|" + tc.bind + "|" + tc.client; string(out) != want {
+				t.Fatalf("CHANNELS|BIND_LINE|CLIENT_RULES = %q, want %q", out, want)
 			}
 		})
 	}

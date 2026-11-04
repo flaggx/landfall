@@ -169,18 +169,27 @@ func (s *redisSandbox) cli(args ...string) string {
 // this Redis accepts: channel rules (&*) only exist from Redis 6.2.
 func (s *redisSandbox) appRules() []string {
 	s.t.Helper()
+	if major, minor := s.version(); major > 6 || (major == 6 && minor >= 2) {
+		return []string{"~*", "&*", "+@all"}
+	}
+	return []string{"~*", "+@all"}
+}
+
+// version returns the sandbox Redis server's major and minor version.
+func (s *redisSandbox) version() (major, minor int) {
+	s.t.Helper()
 	out, err := exec.Command(filepath.Join(s.bin, "redis-server"), "--version").Output()
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	var major, minor int
-	if _, err := fmt.Sscanf(string(out[strings.Index(string(out), "v=")+2:]), "%d.%d", &major, &minor); err != nil {
+	i := strings.Index(string(out), "v=")
+	if i < 0 {
+		s.t.Fatalf("cannot find the version in %q", out)
+	}
+	if _, err := fmt.Sscanf(string(out[i+2:]), "%d.%d", &major, &minor); err != nil {
 		s.t.Fatalf("cannot parse %q: %v", out, err)
 	}
-	if major > 6 || (major == 6 && minor >= 2) {
-		return []string{"~*", "&*", "+@all"}
-	}
-	return []string{"~*", "+@all"}
+	return major, minor
 }
 
 func (s *redisSandbox) pid() string {
@@ -226,8 +235,22 @@ func TestBootstrapAgainstRealRedis(t *testing.T) {
 	if got := s.cli("-u", url, "CLIENT", "SETNAME", "landfall-test"); got != "OK" {
 		t.Fatalf("app user cannot run CLIENT SETNAME: %q", got)
 	}
-	if got := s.cli("-u", url, "CLIENT", "SETINFO", "lib-name", "landfall-test"); strings.Contains(got, "NOPERM") {
-		t.Fatalf("app user must be allowed to run CLIENT SETINFO: %q", got)
+	if got := s.cli("-u", url, "CLIENT", "GETNAME"); got != "landfall-test" {
+		t.Fatalf("app user cannot run CLIENT GETNAME: %q", got)
+	}
+	if got := s.cli("-u", url, "CLIENT", "ID"); strings.Contains(got, "NOPERM") || got == "" {
+		t.Fatalf("app user cannot run CLIENT ID: %q", got)
+	}
+	// Before 7.0 the rest of CLIENT stays admin-only (SETINFO does not exist
+	// there; clients ignore its error). From 7.0 SETINFO is in @connection.
+	if major, _ := s.version(); major >= 7 {
+		if got := s.cli("-u", url, "CLIENT", "SETINFO", "lib-name", "landfall-test"); strings.Contains(got, "NOPERM") {
+			t.Fatalf("app user must be allowed to run CLIENT SETINFO: %q", got)
+		}
+	}
+	// Other CLIENT subcommands can disconnect or spy on other apps.
+	if got := s.cli("-u", url, "CLIENT", "KILL", "ID", "999999"); !strings.Contains(got, "NOPERM") {
+		t.Fatalf("app user must not be allowed to run CLIENT KILL, got %q", got)
 	}
 	for _, admin := range [][]string{{"ACL", "LIST"}, {"CONFIG", "GET", "aclfile"}, {"ACL", "SETUSER", "default", "nopass"}} {
 		if got := s.cli(append([]string{"-u", url}, admin...)...); !strings.Contains(got, "NOPERM") {
