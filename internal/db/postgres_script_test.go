@@ -121,6 +121,7 @@ func runBootstrap(t *testing.T, reset bool, env ...string) (map[string]string, s
 echo "$cmd" >> ` + util.ShellQuote(log) + `
 if [ -n "${FAIL_ON:-}" ] && [[ "$cmd" == *"$FAIL_ON"* ]]; then echo "ERROR: simulated" >&2; exit 1; fi
 case "$cmd" in
+  *"SHOW port"*) echo " ${STUB_PORT:-5432}" ;;
   *pg_roles*) [ "${STUB_USER_EXISTS:-}" = 1 ] && echo 1 ;;
   *pg_database*) [ "${STUB_DB_EXISTS:-}" = 1 ] && echo 1 ;;
 esac
@@ -191,5 +192,19 @@ func TestBootstrapKeepsNewUserPasswordOnFailure(t *testing.T) {
 	}
 	if !strings.HasPrefix(vars["DATABASE_URL"], "postgresql://shared_user:") || vars["COMPLETE"] != "false" {
 		t.Fatalf("the new user's URL must be recorded, got %v", vars)
+	}
+}
+
+// A server on another port than postgres.port is reported before anything
+// changes, instead of failing later with a confusing connection error.
+func TestBootstrapPortMismatch(t *testing.T) {
+	_, out, cmds, err := runBootstrap(t, false, "STUB_PORT=5433")
+	if err == nil || !strings.Contains(out, "listens on port 5433, but postgres.port is 5432") {
+		t.Fatalf("expected a port mismatch error, got err=%v\n%s", err, out)
+	}
+	for _, c := range cmds {
+		if strings.Contains(c, "CREATE") || strings.Contains(c, "ALTER") || strings.Contains(c, "GRANT") {
+			t.Fatalf("nothing may change on a port mismatch, ran %q", c)
+		}
 	}
 }

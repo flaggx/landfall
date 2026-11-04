@@ -530,3 +530,26 @@ func TestBootstrapRewritesPublicBind(t *testing.T) {
 		t.Fatalf("Redis is not serving after the bind rewrite: %q", got)
 	}
 }
+
+// redis.port that doesn't match the server is reported, and nothing is
+// changed. (Slow: bootstrap first waits ~20s for Redis to answer.)
+func TestBootstrapReportsPortMismatch(t *testing.T) {
+	s := newRedisSandbox(t)
+	if out, err := s.sh("systemctl start redis-server"); err != nil {
+		t.Fatalf("start: %v\n%s", err, out)
+	}
+	waitForRedis(t, s)
+	conf, _ := os.ReadFile(s.paths.Conf)
+
+	wrong := s.port + 1
+	out, err := s.sh(buildBootstrapScript(s.paths, "app_prod", wrong, 0, filepath.Join(s.dir, "result.env"), false))
+	if err == nil || !strings.Contains(out, fmt.Sprintf("does not answer on port %d", wrong)) || !strings.Contains(out, fmt.Sprintf("sets port %d", s.port)) {
+		t.Fatalf("expected a port mismatch error naming both ports, got err=%v\n%s", err, out)
+	}
+	if after, _ := os.ReadFile(s.paths.Conf); string(after) != string(conf) {
+		t.Fatalf("redis.conf must not change:\n%s", after)
+	}
+	if got := s.cli("ping"); got != "PONG" {
+		t.Fatalf("the default user must be left untouched, got %q", got)
+	}
+}

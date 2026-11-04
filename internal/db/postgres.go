@@ -256,6 +256,16 @@ else
   exit 1
 fi
 
+# One PostgreSQL serves every environment on the host, so a port that
+# doesn't match is reported rather than changed (that would cut off the
+# others).
+ACTUAL_PORT=$(sudo -u postgres psql -tAc "SHOW port" | tr -d '[:space:]')
+if [ "$ACTUAL_PORT" != "$DB_PORT" ]; then
+  echo "PostgreSQL on this host listens on port $ACTUAL_PORT, but postgres.port is $DB_PORT." >&2
+  echo "Set postgres.port = $ACTUAL_PORT, or change port in postgresql.conf and restart PostgreSQL." >&2
+  exit 1
+fi
+
 if [ "$REMOTE" = "true" ] && [ -z "$APP_HOST" ]; then
   echo "postgres.app_host (or environment host) is required when postgres.host is set" >&2
   exit 1

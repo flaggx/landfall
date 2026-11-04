@@ -119,6 +119,17 @@ wait_for_redis() {
 }
 wait_for_redis
 
+# One Redis serves every environment on the host, so a port that doesn't
+# match is reported rather than changed (that would cut off the others).
+if ! redis-cli -p "$REDIS_PORT" ping 2>&1 | grep -qE 'PONG|NOAUTH'; then
+  CONF_PORT=$(sudo grep -E '^port[[:space:]]+[0-9]+' "$REDIS_CONF" 2>/dev/null | awk '{print $2}' | tail -n 1 || true)
+  echo "Redis does not answer on port $REDIS_PORT (redis.port for this environment)." >&2
+  if [ -n "$CONF_PORT" ] && [ "$CONF_PORT" != "$REDIS_PORT" ]; then
+    echo "$REDIS_CONF sets port $CONF_PORT: set redis.port = $CONF_PORT, or change port in $REDIS_CONF and restart Redis." >&2
+  fi
+  exit 1
+fi
+
 # Ensure Redis only listens locally and keeps ACL users in a file. Without an
 # aclfile, ACL SAVE fails and users created below vanish when Redis restarts.
 # /etc/redis is readable only by the redis user, so test with sudo.
