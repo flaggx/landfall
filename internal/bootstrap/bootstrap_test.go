@@ -50,6 +50,8 @@ func TestSystemdTemplateRenders(t *testing.T) {
 		"PrivateTmp=true",
 		"ProtectHome=true",
 		"RestrictSUIDSGID=true",
+		// os.networkInterfaces() needs a netlink socket.
+		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in %s", needle, out)
