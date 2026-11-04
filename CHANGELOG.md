@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Scripts, their results (which can hold new passwords) and uploaded unit
+  and Caddy files no longer use fixed names in `/tmp` on the server, which
+  any other user there could create first or symlink. Each session uses its
+  own `mktemp -d` directory (mode `700`) and removes it at the end.
 - Uploaded files are created with their final mode (for example `600` for
   `.env.production`) instead of `644` followed by a chmod, so secrets are
   never briefly readable by other users on the server.
