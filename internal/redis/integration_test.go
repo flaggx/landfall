@@ -373,9 +373,10 @@ func TestEnvironmentsAreIsolated(t *testing.T) {
 		t.Fatalf("prod's data must survive dev's FLUSHALL, got %q", got)
 	}
 	// Dev filling its memory fails dev's writes (noeviction), not prod's.
-	big := strings.Repeat("x", 512*1024)
+	// 100 KB: Linux caps a single command-line argument at 128 KB.
+	big := strings.Repeat("x", 100*1024)
 	var full bool
-	for i := 0; i < 20 && !full; i++ {
+	for i := 0; i < 100 && !full; i++ {
 		full = strings.Contains(s.cli(devPort, "-u", dev, "set", fmt.Sprintf("big:%d", i), big), "OOM")
 	}
 	if !full {
