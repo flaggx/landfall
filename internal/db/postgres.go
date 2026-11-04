@@ -49,7 +49,10 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 
 	fmt.Fprintf(os.Stdout, "Setting up PostgreSQL for %s on %s...\n", cfg.EnvName, cfg.PostgresSSHHost())
 
-	resultPath := fmt.Sprintf("/tmp/landfall-db-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
+	resultPath, err := client.TempPath("landfall-db.env")
+	if err != nil {
+		return nil, err
+	}
 	script := buildBootstrapScript(cfg, dbName, dbUser, resultPath, opts.ResetPassword)
 
 	_, runErr := client.RunScript("landfall-db-bootstrap.sh", script)

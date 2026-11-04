@@ -10,8 +10,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
@@ -23,6 +25,9 @@ type Client struct {
 	host    string
 	user    string
 	keyPath string
+
+	tempMu  sync.Mutex
+	tempDir string
 }
 
 type Options struct {
@@ -210,11 +215,56 @@ func knownHostAlgorithms(verify gossh.HostKeyCallback, addr string) []string {
 	return append(algos, rest...)
 }
 
+// Close removes the session's private temp directory, if one was created,
+// and closes the connection.
 func (c *Client) Close() error {
 	if c.conn == nil {
 		return nil
 	}
+	c.tempMu.Lock()
+	dir := c.tempDir
+	c.tempDir = ""
+	c.tempMu.Unlock()
+	if dir != "" {
+		_, _ = c.RunWithOutput("rm -rf -- "+shellQuote(dir), io.Discard, io.Discard)
+	}
 	return c.conn.Close()
+}
+
+// tempDirPattern is what `mktemp -d /tmp/landfall.XXXXXXXXXX` produces.
+var tempDirPattern = regexp.MustCompile(`^/tmp/landfall\.[A-Za-z0-9]{10}$`)
+
+// TempDir returns a private directory on the server for this session's
+// scripts and result files: created on first use with mktemp -d (mode 700,
+// owned by the SSH user, unpredictable name) and removed by Close. Fixed
+// names in /tmp could be created first, or symlinked, by any other user on
+// the server.
+func (c *Client) TempDir() (string, error) {
+	c.tempMu.Lock()
+	defer c.tempMu.Unlock()
+	if c.tempDir != "" {
+		return c.tempDir, nil
+	}
+	var out bytes.Buffer
+	if _, err := c.RunWithOutput("mktemp -d /tmp/landfall.XXXXXXXXXX", &out, os.Stderr); err != nil {
+		return "", fmt.Errorf("create a private temp directory on the server: %w", err)
+	}
+	dir := strings.TrimSpace(out.String())
+	if !tempDirPattern.MatchString(dir) {
+		return "", fmt.Errorf("unexpected temp directory %q from mktemp on the server", dir)
+	}
+	c.tempDir = dir
+	return dir, nil
+}
+
+// TempPath returns a path for name inside the session's private temp
+// directory (see TempDir).
+func (c *Client) TempPath(name string) (string, error) {
+	dir, err := c.TempDir()
+	if err != nil {
+		return "", err
+	}
+	return path.Join(dir, path.Base(name)), nil
 }
 
 func (c *Client) Run(command string) (int, error) {
@@ -244,13 +294,19 @@ func (c *Client) RunWithOutput(command string, stdout, stderr io.Writer) (int, e
 	return -1, err
 }
 
+// RunScript uploads script into the session's private temp directory, runs
+// it with bash and removes it.
 func (c *Client) RunScript(name, script string) (int, error) {
-	remotePath := path.Join("/tmp", name)
+	remotePath, err := c.TempPath(name)
+	if err != nil {
+		return -1, err
+	}
 	if err := c.UploadFile(remotePath, []byte(script), 0o700); err != nil {
 		return -1, err
 	}
 
-	cmd := fmt.Sprintf("bash %s; exit_code=$?; rm -f %s; exit $exit_code", remotePath, remotePath)
+	quoted := shellQuote(remotePath)
+	cmd := fmt.Sprintf("bash %s; exit_code=$?; rm -f %s; exit $exit_code", quoted, quoted)
 	return c.Run(cmd)
 }
 

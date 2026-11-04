@@ -155,7 +155,10 @@ func installSystemdUnit(client *ssh.Client, cfg *config.ResolvedConfig, appUser 
 		return err
 	}
 
-	remotePath := fmt.Sprintf("/tmp/%s.service", cfg.ServiceName())
+	remotePath, err := client.TempPath(cfg.ServiceName() + ".service")
+	if err != nil {
+		return err
+	}
 	if err := client.UploadFile(remotePath, buf.Bytes(), 0o644); err != nil {
 		return err
 	}
@@ -202,7 +205,10 @@ fi
 		return err
 	}
 
-	caddyPath := fmt.Sprintf("/tmp/caddy-%s.conf", cfg.ServiceName())
+	caddyPath, err := client.TempPath("caddy-" + cfg.ServiceName() + ".conf")
+	if err != nil {
+		return err
+	}
 	if err := client.UploadFile(caddyPath, buf.Bytes(), 0o644); err != nil {
 		return err
 	}

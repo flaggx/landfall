@@ -48,7 +48,10 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 
 	fmt.Fprintf(os.Stdout, "Setting up Redis for %s on %s...\n", cfg.EnvName, cfg.SSHAddress())
 
-	resultPath := fmt.Sprintf("/tmp/landfall-redis-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
+	resultPath, err := client.TempPath("landfall-redis.env")
+	if err != nil {
+		return nil, err
+	}
 	script := buildBootstrapScript(DefaultPaths, redisUser, redisPort, redisDB, resultPath, opts.ResetPassword)
 
 	_, runErr := client.RunScript("landfall-redis-bootstrap.sh", script)

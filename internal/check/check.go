@@ -116,7 +116,10 @@ func runRemoteChecks(client *ssh.Client, cfg *config.ResolvedConfig) ([]Result, 
 	expectEnvFile := len(cfg.Environment.Env) > 0
 	permissionsChecks := security.BuildPermissionsCheckScript(deployPath, cfg.Environment.User, expectEnvFile)
 
-	resultPath := fmt.Sprintf("/tmp/landfall-check-%s.env", cfg.EnvName)
+	resultPath, err := client.TempPath("landfall-check.env")
+	if err != nil {
+		return nil, err
+	}
 	script := fmt.Sprintf(`
 set -euo pipefail
 RESULT=%s
