@@ -235,7 +235,9 @@ func TestBootstrapAgainstRealRedis(t *testing.T) {
 	if got := s.cli("-u", url, "CLIENT", "SETNAME", "landfall-test"); got != "OK" {
 		t.Fatalf("app user cannot run CLIENT SETNAME: %q", got)
 	}
-	if got := s.cli("-u", url, "CLIENT", "GETNAME"); got != "landfall-test" {
+	// Each cli call is a new, unnamed connection, so GETNAME returns nothing;
+	// only a permission error matters here.
+	if got := s.cli("-u", url, "CLIENT", "GETNAME"); strings.Contains(got, "NOPERM") {
 		t.Fatalf("app user cannot run CLIENT GETNAME: %q", got)
 	}
 	if got := s.cli("-u", url, "CLIENT", "ID"); strings.Contains(got, "NOPERM") || got == "" {
