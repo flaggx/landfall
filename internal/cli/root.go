@@ -173,7 +173,8 @@ func loadConfig() (*config.ResolvedConfig, error) {
 }
 
 // loadConfigForConnection loads project config without requiring secrets.
-// Use for harden/bootstrap/db/redis/status/logs — those run before secrets exist.
+// Use for harden/bootstrap/db/redis/status/logs — those run before secrets exist —
+// and for check, which reports missing secrets itself.
 func loadConfigForConnection() (*config.ResolvedConfig, error) {
 	return config.LoadWithOptions(envName, projectDir, config.LoadOptions{ResolveSecrets: false})
 }

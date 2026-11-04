@@ -20,7 +20,10 @@ func newCheckCmd() *cobra.Command {
 
 Use after first-time setup or any time you want a pass/fail audit.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
+			// Secrets are not resolved here: check only needs to know which
+			// ones are referenced, and reports missing ones itself instead
+			// of stopping before the report.
+			cfg, err := loadConfigForConnection()
 			if err != nil {
 				return err
 			}
