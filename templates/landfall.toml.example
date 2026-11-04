@@ -51,7 +51,9 @@ domain = "dev.app.example.com"
 health_check = "http://127.0.0.1:3001/api/health"
 
 [environments.dev.env]
-NODE_ENV = "development"
+# Not NODE_ENV = "development": Next.js would build and run in development
+# mode. Use your own variable to tell environments apart.
+APP_ENV = "development"
 DATABASE_URL = "{{secret:dev_db_url}}"
 REDIS_URL = "{{secret:dev_redis_url}}"
 

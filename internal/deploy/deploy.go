@@ -50,6 +50,10 @@ func Run(cfg *config.ResolvedConfig, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	if warning := nodeEnvWarning(cfg); warning != "" {
+		fmt.Fprintln(os.Stderr, warning)
+	}
+
 	client, err := ssh.New(ssh.Options{
 		Host:    cfg.Environment.Host,
 		User:    cfg.Environment.User,
@@ -153,6 +157,37 @@ df -h %s | tail -1
 	return err
 }
 
+// fetchRefSnippet fetches $REF from origin and sets TARGET to its commit. A
+// branch, tag or full SHA is fetched by name. A short commit SHA cannot be
+// (git fetch only takes full object names, and many servers refuse even
+// those), so then every branch and tag is fetched and the prefix is resolved
+// locally.
+const fetchRefSnippet = `if git fetch origin -- "$REF"; then
+  TARGET=$(git rev-parse --verify FETCH_HEAD^{commit})
+elif printf '%s' "$REF" | grep -qE '^[0-9a-fA-F]{4,39}$'; then
+  echo "Fetching all branches and tags to resolve the short commit SHA $REF"
+  git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+  if ! TARGET=$(git rev-parse --verify --quiet "$REF^{commit}"); then
+    echo "commit $REF not found on origin (or the prefix is ambiguous)" >&2
+    exit 1
+  fi
+else
+  exit 1
+fi`
+
+// nodeEnvWarning explains why a NODE_ENV other than production in the
+// environment's env is a problem: .env.production is loaded after Landfall
+// sets NODE_ENV=production, for the build and for systemd, so the value wins
+// and Next.js builds and runs a non-production app.
+func nodeEnvWarning(cfg *config.ResolvedConfig) string {
+	for key, value := range cfg.Environment.Env {
+		if key == "NODE_ENV" && value != "production" {
+			return fmt.Sprintf("Warning: [environments.%s.env] sets NODE_ENV = %q. It overrides Landfall's NODE_ENV=production for the build and the running app, so Next.js runs in a non-production mode (slower, more memory, dev-only behaviour). Remove it, and use your own variable (e.g. APP_ENV) to tell environments apart.", cfg.EnvName, value)
+		}
+	}
+	return ""
+}
+
 func syncRepo(client *ssh.Client, cfg *config.ResolvedConfig, ref string) error {
 	repo := cfg.Project.Project.Repo
 	path := cfg.Environment.Path
@@ -165,15 +200,16 @@ if [ ! -d %s/.git ]; then
 fi
 cd %s
 git remote set-url origin %s
-git fetch origin %s
+REF=%s
+%s
 if git show-ref --verify --quiet refs/heads/%s; then
   git checkout %s
 else
   git checkout -b %s origin/%s 2>/dev/null || git checkout %s
 fi
-git reset --hard FETCH_HEAD
+git reset --hard "$TARGET"
 `, shellQuote(path), shellQuote(repo), shellQuote(path),
-		shellQuote(path), shellQuote(repo), shellQuote(ref),
+		shellQuote(path), shellQuote(repo), shellQuote(ref), fetchRefSnippet,
 		shellQuote(ref), shellQuote(ref),
 		shellQuote(ref), shellQuote(branch), shellQuote(ref))
 

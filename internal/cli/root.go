@@ -236,7 +236,9 @@ func runInit() error {
 				Domain:      devDomain,
 				HealthCheck: fmt.Sprintf("http://127.0.0.1:%d/api/health", devPort),
 				Env: map[string]string{
-					"NODE_ENV":     "development",
+					// Not NODE_ENV=development: that would build and run the
+					// app in Next.js's development mode (see nodeEnvWarning).
+					"APP_ENV":      "development",
 					"DATABASE_URL": "{{secret:dev_db_url}}",
 					"REDIS_URL":    "{{secret:dev_redis_url}}",
 				},

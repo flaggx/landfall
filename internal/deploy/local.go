@@ -65,6 +65,30 @@ func validateRef(ref string) error {
 	return nil
 }
 
+var shortSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,39}$`)
+
+// fetchRef fetches ref into the build clone and returns its commit. A short
+// commit SHA can't be fetched by name, so for one every branch and tag is
+// fetched and the prefix resolved locally (see fetchRefSnippet).
+func fetchRef(dir, ref string) (string, error) {
+	fetchErr := runLocal(dir, nil, "git", "fetch", "origin", "--", ref)
+	if fetchErr == nil {
+		return localOutput(dir, "git", "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+	}
+	if !shortSHAPattern.MatchString(ref) {
+		return "", fetchErr
+	}
+	fmt.Fprintf(os.Stdout, "Fetching all branches and tags to resolve the short commit SHA %s\n", ref)
+	if err := runLocal(dir, nil, "git", "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"); err != nil {
+		return "", err
+	}
+	commit, err := localOutput(dir, "git", "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil || commit == "" {
+		return "", fmt.Errorf("commit %s not found on origin (or the prefix is ambiguous)", ref)
+	}
+	return commit, nil
+}
+
 func validateLocalBuildTarget(cfg *config.ResolvedConfig) error {
 	if !safeHostPattern.MatchString(cfg.Environment.Host) {
 		return fmt.Errorf("local builds need a plain hostname or IPv4 address, got host %q", cfg.Environment.Host)
@@ -169,10 +193,7 @@ func buildLocally(cfg *config.ResolvedConfig, ref string) (dir, commit string, e
 	if err := runLocal(dir, nil, "git", "remote", "set-url", "origin", "--", repo); err != nil {
 		return "", "", err
 	}
-	if err := runLocal(dir, nil, "git", "fetch", "origin", "--", ref); err != nil {
-		return "", "", err
-	}
-	commit, err = localOutput(dir, "git", "rev-parse", "FETCH_HEAD^{commit}")
+	commit, err = fetchRef(dir, ref)
 	if err != nil {
 		return "", "", err
 	}
