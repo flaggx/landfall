@@ -316,6 +316,9 @@ func validateEnvironment(name string, env Environment) error {
 	if env.Port <= 0 {
 		return fmt.Errorf("environments.%s.port must be > 0", name)
 	}
+	if env.Redis != nil && env.Redis.Database != nil && *env.Redis.Database < 0 {
+		return fmt.Errorf("environments.%s.redis.database must be >= 0", name)
+	}
 	if env.AppUser != "" {
 		if err := validateAppUser(env.AppUser, env.User); err != nil {
 			return fmt.Errorf("environments.%s.app_user: %w", name, err)
