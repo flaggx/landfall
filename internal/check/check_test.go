@@ -1,6 +1,7 @@
 package check
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,5 +129,53 @@ func TestISRCacheCheckScript(t *testing.T) {
 				t.Fatalf("got %+v, want %s with %q", r, tc.wantStatus, tc.wantDetail)
 			}
 		})
+	}
+}
+
+// With a dedicated DB server, check tests that its port is reachable from
+// the app server instead of running psql where PostgreSQL isn't installed.
+// 127.0.0.2 stands in for the DB host.
+func TestPostgresCheckRemote(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Skipf("cannot listen on 127.0.0.2: %v", err)
+	}
+	defer ln.Close()
+	open := ln.Addr().(*net.TCPAddr).Port
+	closed, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := closed.Addr().(*net.TCPAddr).Port
+	closed.Close()
+
+	for _, tc := range []struct {
+		port int
+		want Status
+	}{{open, StatusPass}, {closedPort, StatusFail}} {
+		cfg := &config.ResolvedConfig{Environment: config.Environment{
+			Host:     "203.0.113.10",
+			Postgres: &config.PostgresConfig{Host: "127.0.0.2", Port: tc.port},
+		}}
+		result := filepath.Join(t.TempDir(), "result")
+		script := "set -euo pipefail\nRESULT=" + util.ShellQuote(result) + "\n" +
+			`pass() { echo "$1=PASS|$2" >> "$RESULT"; }` + "\n" +
+			`fail() { echo "$1=FAIL|$2" >> "$RESULT"; }` + "\n" +
+			postgresCheckScript(cfg, true, "app_prod")
+		if strings.Contains(script, "psql") {
+			t.Fatal("the remote check must not run psql on the app server")
+		}
+		if out, err := exec.Command(bash, "-c", script).CombinedOutput(); err != nil {
+			t.Fatalf("script failed: %v\n%s", err, out)
+		}
+		raw, _ := os.ReadFile(result)
+		results := parseRemoteResults(string(raw))
+		if len(results) != 1 || results[0].Status != tc.want || !strings.Contains(results[0].Detail, "127.0.0.2:") {
+			t.Fatalf("port %d: got %+v, want %s", tc.port, results, tc.want)
+		}
 	}
 }
