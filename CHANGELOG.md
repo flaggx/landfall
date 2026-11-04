@@ -5,6 +5,57 @@ All notable changes to Landfall are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Upgrading
+
+- If a dev, staging or other non-prod environment has a `[redis]` table
+  without `database`, it was given DB 0, the same as prod. It now gets its
+  own default (dev 1, staging 2, others 3), but the DB index is part of the
+  saved `REDIS_URL`, so existing environments keep using DB 0 until you run
+  `landfall redis bootstrap --env <env> --reset-password --save-secret` and
+  redeploy.
+- The first `landfall redis bootstrap` on a server set up by 0.1.x adds an
+  `aclfile` and restarts Redis. Users that only existed in memory are now
+  copied into the new file first, so no environment loses its Redis user.
+
+### Security
+
+- Uploaded files are created with their final mode (for example `600` for
+  `.env.production`) instead of `644` followed by a chmod, so secrets are
+  never briefly readable by other users on the server.
+
+### Fixed
+
+- Connecting no longer fails with a false "REMOTE HOST IDENTIFICATION HAS
+  CHANGED" when `known_hosts` has a different key type for the server than
+  the one Go picked (for example ed25519 recorded, ECDSA negotiated). Only
+  the recorded key types are negotiated now.
+- `landfall redis bootstrap` works on Redis 6.0 (Ubuntu 22.04). It used
+  channel rules (`&*`) and the `-` bind prefix, which only exist from 6.2,
+  and the app user could not run `CLIENT SETNAME`, which client libraries
+  send while connecting.
+- `redis bootstrap --reset-password` no longer locks the app out if a later
+  step fails: every check runs before the password changes, and the new
+  `REDIS_URL` is saved or printed even when the run fails afterwards.
+  Inline `user` lines in `redis.conf` now stop the run before anything
+  changes.
+- A `[redis]` table without `database` keeps the per-environment default
+  instead of DB 0 (see Upgrading).
+- A backup whose `pg_dump` fails partway no longer leaves a truncated
+  `.dump` that `db list` shows and `db restore` accepts.
+- Deploy paths inside a home directory work with the app user: it gets an
+  ACL entry to pass through parent directories it cannot search (Ubuntu
+  21.04+ creates homes as `0750`). The `acl` package is installed if needed.
+- `landfall check` reports missing secrets in its table instead of stopping
+  with "secret ... is not set" before printing anything.
+- `bootstrap --caddy` keeps existing sites in `/etc/caddy/Caddyfile`. Only a
+  missing, empty or stock demo file is replaced; any other file gets
+  `import landfall/*` appended. The old file is backed up, and if Caddy
+  rejects the result it is restored and Caddy is not reloaded.
+- File uploads no longer risk a panic from a race between setting up the
+  scp session and starting it.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
@@ -189,6 +240,7 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
+[Unreleased]: https://github.com/flaggx/landfall/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/flaggx/landfall/releases/tag/v0.4.0
 [0.3.1]: https://github.com/flaggx/landfall/releases/tag/v0.3.1
 [0.3.0]: https://github.com/flaggx/landfall/releases/tag/v0.3.0
