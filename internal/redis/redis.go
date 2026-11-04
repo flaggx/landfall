@@ -51,15 +51,25 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 	resultPath := fmt.Sprintf("/tmp/landfall-redis-%s-%s.env", cfg.Project.Project.Name, cfg.EnvName)
 	script := buildBootstrapScript(DefaultPaths, redisUser, redisPort, redisDB, resultPath, opts.ResetPassword)
 
-	if _, err := client.RunScript("landfall-redis-bootstrap.sh", script); err != nil {
-		return nil, err
-	}
+	_, runErr := client.RunScript("landfall-redis-bootstrap.sh", script)
 
-	raw, err := client.ReadFile(resultPath)
-	if err != nil {
-		return nil, fmt.Errorf("read bootstrap result: %w", err)
-	}
+	raw, readErr := client.ReadFile(resultPath)
 	_, _ = client.Run(fmt.Sprintf("rm -f %s", util.ShellQuote(resultPath)))
+
+	if runErr != nil {
+		// The script records a new password as soon as Redis uses it. If a
+		// later step failed, the app's old password has already stopped
+		// working, so the new one must not be lost.
+		if readErr == nil {
+			if url := util.ParseEnvFile(string(raw))["REDIS_URL"]; url != "" {
+				return nil, rescueConnectionString(cfg, opts, url, runErr)
+			}
+		}
+		return nil, runErr
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("read bootstrap result: %w", readErr)
+	}
 
 	vars := util.ParseEnvFile(string(raw))
 	connectionString := vars["REDIS_URL"]
@@ -105,6 +115,23 @@ func Bootstrap(cfg *config.ResolvedConfig, opts BootstrapOptions) (*BootstrapRes
 	}
 
 	return result, nil
+}
+
+// rescueConnectionString handles a bootstrap that changed the app user's
+// password in Redis but then failed: it saves or prints the new URL so the
+// app can be redeployed with it, and returns an error explaining both.
+func rescueConnectionString(cfg *config.ResolvedConfig, opts BootstrapOptions, url string, runErr error) error {
+	secret := cfg.RedisSecretName()
+	if opts.SaveSecret {
+		if _, err := config.InitSecretsFile(); err == nil {
+			if err := config.SetSecret(secret, url); err == nil {
+				fmt.Fprintf(os.Stdout, "Saved secret %q with the new Redis password.\n", secret)
+				return fmt.Errorf("redis bootstrap failed after changing the password (the new one is saved in %q; redeploy, then fix the error and re-run without --reset-password): %w", secret, runErr)
+			}
+		}
+	}
+	fmt.Fprintf(os.Stdout, "\nRedis already uses a new password for this environment. Save it now:\n  landfall secrets set %s --value %q\n", secret, url)
+	return fmt.Errorf("redis bootstrap failed after changing the password (save the URL above, redeploy, then fix the error and re-run without --reset-password): %w", runErr)
 }
 
 func Status(cfg *config.ResolvedConfig) error {
