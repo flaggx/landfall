@@ -185,12 +185,21 @@ sudo ufw default allow outgoing
 sudo ufw --force enable
 
 # --- fail2ban ---
-sudo tee /etc/fail2ban/jail.d/landfall-sshd.local >/dev/null <<'EOF'
+# Ubuntu logs SSH logins to /var/log/auth.log (rsyslog). Debian 12 has no
+# rsyslog by default and only logs to the journal, where fail2ban needs the
+# systemd backend (and python3-systemd) instead of a log path.
+if [ -f /var/log/auth.log ]; then
+  F2B_SOURCE="logpath = /var/log/auth.log"
+else
+  sudo apt-get install -y -qq python3-systemd
+  F2B_SOURCE="backend = systemd"
+fi
+sudo tee /etc/fail2ban/jail.d/landfall-sshd.local >/dev/null <<EOF
 [sshd]
 enabled = true
 port = ssh
 filter = sshd
-logpath = /var/log/auth.log
+${F2B_SOURCE}
 maxretry = 5
 findtime = 10m
 bantime = 1h
