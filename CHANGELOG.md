@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `redis migrate` no longer refuses an environment because another one on
+  the same host uses the same DB index after that one has already moved to
+  its own instance (for example staging migrated first, now on
+  `127.0.0.1:6380/0`, blocking prod on `6379/0`). Only environments whose
+  `REDIS_URL` is still on the shared Redis count. The error no longer
+  suggests `--from-db`, which did not get past this check.
+
 ## [0.5.0] - 2026-11-05
 
 ### Upgrading

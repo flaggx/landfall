@@ -38,7 +38,8 @@ func Migrate(cfg *config.ResolvedConfig, opts MigrateOptions) error {
 	if !referencesSecret(cfg, secretName) {
 		return fmt.Errorf("environments.%s.env does not use {{secret:%s}}; add REDIS_URL = \"{{secret:%s}}\" so the app picks up the new instance, then run migrate again", cfg.EnvName, secretName, secretName)
 	}
-	fromDB, err := migrationSourceDB(cfg, opts)
+	secrets, _ := config.LoadSecrets()
+	fromDB, err := migrationSourceDB(cfg, opts, secrets.Secrets, DefaultLayout.SharedPort)
 	if err != nil {
 		return err
 	}
@@ -141,17 +142,23 @@ func referencesSecret(cfg *config.ResolvedConfig, secret string) bool {
 // really uses), else the per-environment default. It refuses an index that
 // another environment on the same host also uses, since its keys would be
 // copied into this environment's instance.
-func migrationSourceDB(cfg *config.ResolvedConfig, opts MigrateOptions) (int, error) {
-	secrets, _ := config.LoadSecrets()
-	dbOf := func(envName string, env config.Environment) int {
+func migrationSourceDB(cfg *config.ResolvedConfig, opts MigrateOptions, secrets map[string]string, sharedPort int) (int, error) {
+	// sharedDB is the DB index an environment uses on the shared Redis, and
+	// false when its REDIS_URL already points at another port (its own
+	// instance), so it has no keys on the shared Redis to collide with.
+	sharedDB := func(envName string, env config.Environment) (int, bool) {
 		c := &config.ResolvedConfig{EnvName: envName, Environment: env}
-		if db, ok := urlDB(secrets.Secrets[c.RedisSecretName()]); ok {
-			return db
+		raw := secrets[c.RedisSecretName()]
+		if port, ok := urlPort(raw); ok && port != sharedPort {
+			return 0, false
 		}
-		return c.LegacyRedisDatabase()
+		if db, ok := urlDB(raw); ok {
+			return db, true
+		}
+		return c.LegacyRedisDatabase(), true
 	}
 
-	from := dbOf(cfg.EnvName, cfg.Environment)
+	from, _ := sharedDB(cfg.EnvName, cfg.Environment)
 	if opts.FromDB != nil {
 		from = *opts.FromDB
 	}
@@ -162,11 +169,30 @@ func migrationSourceDB(cfg *config.ResolvedConfig, opts MigrateOptions) (int, er
 		if name == cfg.EnvName || env.Host != cfg.Environment.Host || env.Redis == nil && !usesRedis(env) {
 			continue
 		}
-		if dbOf(name, env) == from {
-			return 0, fmt.Errorf("environment %s on the same host also uses DB %d on the shared Redis, so migrating %s would copy its keys too; pass --from-db with %s's index, or --allow-shared-db to copy everything in DB %d", name, from, cfg.EnvName, cfg.EnvName, from)
+		if db, onShared := sharedDB(name, env); onShared && db == from {
+			return 0, fmt.Errorf("environment %s on the same host also uses DB %d on the shared Redis, so migrating %s would copy its keys too; migrate %s first, or pass --allow-shared-db to copy everything in DB %d", name, from, cfg.EnvName, name, from)
 		}
 	}
 	return from, nil
+}
+
+// urlPort returns the port in a redis:// URL, 6379 when it has none.
+func urlPort(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return 0, false
+	}
+	if p := u.Port(); p != "" {
+		port, err := strconv.Atoi(p)
+		if err != nil {
+			return 0, false
+		}
+		return port, true
+	}
+	return 6379, true
 }
 
 func usesRedis(env config.Environment) bool {
