@@ -57,8 +57,11 @@ APP_ENV = "development"
 DATABASE_URL = "{{secret:dev_db_url}}"
 REDIS_URL = "{{secret:dev_redis_url}}"
 
-# Optional: override default Redis settings (defaults: port 6379, DB index 0 for prod / 1 for dev)
-# [environments.prod.redis]
-# port = 6379
-# database = 0
-# user = "my_webapp_prod"
+# Optional: override Redis settings. Each environment has its own instance
+# (redis-server@<project>-<env>); defaults: a port picked from 6380 up,
+# maxmemory 128mb (no limit for prod), noeviction.
+# [environments.dev.redis]
+# port = 6390
+# maxmemory = "256mb"
+# maxmemory_policy = "allkeys-lru"
+# user = "my_webapp_dev"

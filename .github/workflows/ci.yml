@@ -21,8 +21,10 @@ jobs:
         run: make check
         env:
           LANDFALL_REDIS_BIN_DIR: /usr/bin
-          # The runner is throwaway: let the Postgres tests change its config.
+          # The runner is throwaway: let the Postgres and real-systemd Redis
+          # tests change its config.
           LANDFALL_PG_INTEGRATION: "1"
+          LANDFALL_REDIS_SYSTEMD: "1"
 
   # Ubuntu 22.04 ships Redis 6.0, which lacks channel ACL rules (&*) and the
   # "-" bind prefix. Run the Redis integration tests against it.
@@ -42,3 +44,4 @@ jobs:
         run: go test -v -count=1 ./internal/redis/
         env:
           LANDFALL_REDIS_BIN_DIR: /usr/bin
+          LANDFALL_REDIS_SYSTEMD: "1"

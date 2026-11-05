@@ -104,9 +104,6 @@ func Run(cfg *config.ResolvedConfig) (Summary, error) {
 
 func runRemoteChecks(client *ssh.Client, cfg *config.ResolvedConfig) ([]Result, error) {
 	dbName, _ := cfg.PostgresDatabase()
-	redisUser, _ := cfg.RedisUser()
-	redisPort := cfg.RedisPort()
-	redisDB := cfg.RedisDatabase()
 	expectDB := envExpectsPostgres(cfg)
 	expectRedis := envExpectsRedis(cfg)
 	healthURL := cfg.Environment.HealthCheck
@@ -202,29 +199,7 @@ else
 fi
 
 %s
-# Redis
-if [ "%s" = "true" ]; then
-  if command -v redis-cli >/dev/null 2>&1 && sudo systemctl is-active redis-server >/dev/null 2>&1 || sudo systemctl is-active redis >/dev/null 2>&1; then
-    REDIS_PORT=%d
 %s
-    # ACL GETUSER exits 0 for a missing user, so match the name in ACL USERS.
-    if rcli ACL USERS 2>/dev/null | grep -qxF %s; then
-      pass redis "ACL user %s (db %d)"
-    else
-      fail redis "ACL user missing (run: landfall redis bootstrap --reset-password --save-secret, then deploy)"
-    fi
-    if redis-cli -p "$REDIS_PORT" ping 2>/dev/null | grep -qx PONG; then
-      fail redis_default_user "no password: any process on the host can use Redis (run: landfall redis bootstrap)"
-    else
-      pass redis_default_user "password protected"
-    fi
-  else
-    fail redis "not running (run: landfall redis bootstrap)"
-  fi
-else
-  skip redis "not configured"
-fi
-
 # App health endpoint
 if [ -n "%s" ]; then
   BODY=$(curl -fsS "%s" 2>/dev/null || true)
@@ -247,7 +222,7 @@ chmod 600 "$RESULT"
 		serviceName, serviceName,
 		serviceName, util.ShellQuote(cfg.Environment.User), serviceName,
 		postgresCheckScript(cfg, expectDB, dbName),
-		boolString(expectRedis), redisPort, redis.CLIPrelude(redis.DefaultPaths), util.ShellQuote(redisUser), redisUser, redisDB,
+		redisCheckScript(cfg, expectRedis),
 		healthURL, healthURL, healthURL, healthURL,
 		isrCacheCheckScript(serviceName))
 
@@ -262,6 +237,23 @@ chmod 600 "$RESULT"
 	_, _ = client.Run(fmt.Sprintf("rm -f %s", util.ShellQuote(resultPath)))
 
 	return parseRemoteResults(string(raw)), nil
+}
+
+// redisCheckScript checks the environment's own Redis instance (or warns
+// that it still uses the shared one).
+func redisCheckScript(cfg *config.ResolvedConfig, expect bool) string {
+	if !expect {
+		return "\n# Redis\nskip redis \"not configured\"\n"
+	}
+	user, err := cfg.RedisUser()
+	if err != nil {
+		return fmt.Sprintf("\n# Redis\nfail redis %s\n", util.ShellQuote(err.Error()))
+	}
+	instance, err := cfg.RedisInstance()
+	if err != nil {
+		return fmt.Sprintf("\n# Redis\nfail redis %s\n", util.ShellQuote(err.Error()))
+	}
+	return "\n# Redis\n" + redis.CheckScript(redis.DefaultLayout, instance, user, cfg.EnvName)
 }
 
 // postgresCheckScript checks PostgreSQL from the app server. Co-located, it
