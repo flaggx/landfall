@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-05
+
 ### Fixed
 
 - `redis migrate` no longer refuses an environment because another one on
@@ -296,7 +298,8 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
-[Unreleased]: https://github.com/flaggx/landfall/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/flaggx/landfall/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/flaggx/landfall/releases/tag/v0.5.1
 [0.5.0]: https://github.com/flaggx/landfall/releases/tag/v0.5.0
 [0.4.0]: https://github.com/flaggx/landfall/releases/tag/v0.4.0
 [0.3.1]: https://github.com/flaggx/landfall/releases/tag/v0.3.1
