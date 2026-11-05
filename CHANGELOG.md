@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-05
+
 ### Upgrading
 
 - **Redis: each environment now has its own instance** (see Changed). Move
@@ -49,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment on the host also uses.
 - `landfall redis bootstrap --fresh` starts an environment on an empty
   instance even though it still has data on the shared Redis.
+- [scripts/test-redis-migrate.sh](scripts/test-redis-migrate.sh): runs
+  `redis migrate` end to end on a real server, on a non-prod environment,
+  and checks the copy, the switch, the downtime, a restart of the new
+  instance and a deploy afterwards.
 - [templates/cache-handler.js.example](templates/cache-handler.js.example):
   a Next.js cache handler that keeps ISR pages in the app's writable cache
   directory, so regenerated pages survive restarts while the code stays
@@ -281,7 +287,8 @@ bootstrap → `secrets` → `deploy` → `check` / `status` / `logs`, plus local
 - Project renamed from `vpsdeploy` / `vpsdeploymentautomation` to **Landfall**
   (`github.com/flaggx/landfall`)
 
-[Unreleased]: https://github.com/flaggx/landfall/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/flaggx/landfall/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/flaggx/landfall/releases/tag/v0.5.0
 [0.4.0]: https://github.com/flaggx/landfall/releases/tag/v0.4.0
 [0.3.1]: https://github.com/flaggx/landfall/releases/tag/v0.3.1
 [0.3.0]: https://github.com/flaggx/landfall/releases/tag/v0.3.0
