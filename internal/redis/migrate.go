@@ -38,7 +38,10 @@ func Migrate(cfg *config.ResolvedConfig, opts MigrateOptions) error {
 	if !referencesSecret(cfg, secretName) {
 		return fmt.Errorf("environments.%s.env does not use {{secret:%s}}; add REDIS_URL = \"{{secret:%s}}\" so the app picks up the new instance, then run migrate again", cfg.EnvName, secretName, secretName)
 	}
-	secrets, _ := config.LoadSecrets()
+	secrets, err := config.LoadSecrets()
+	if err != nil {
+		return fmt.Errorf("load secrets: %w", err)
+	}
 	fromDB, err := migrationSourceDB(cfg, opts, secrets.Secrets, DefaultLayout.SharedPort)
 	if err != nil {
 		return err
@@ -99,30 +102,66 @@ func Migrate(cfg *config.ResolvedConfig, opts MigrateOptions) error {
 	}
 
 	fmt.Fprintln(os.Stdout, "→ switch REDIS_URL")
-	if err := saveSecret(secretName, newURL); err != nil {
-		return fmt.Errorf("save secret %q (the app still uses the shared Redis): %w\nNew URL: %s", secretName, err, newURL)
+	oldURL := secrets.Secrets[secretName]
+	if err := switchSecret(secretName, oldURL, newURL, saveSecret); err != nil {
+		return fmt.Errorf("%w (the app still uses the shared Redis)\nNew URL: %s", err, newURL)
 	}
+	rollback := rollbackHint(cfg.EnvName, secretName, oldURL != "")
 	resolved, err := config.LoadResolved(cfg.EnvName, cfg.ProjectPath)
 	if err != nil {
-		return fmt.Errorf("reload config with the new secret: %w", err)
+		return fmt.Errorf("reload config with the new secret: %w\n%s", err, rollback)
 	}
 	if err := deploy.WriteEnvFile(client, resolved); err != nil {
-		return fmt.Errorf("write .env.production: %w", err)
+		return fmt.Errorf("write .env.production: %w\n%s", err, rollback)
 	}
 
 	fmt.Fprintln(os.Stdout, "→ start app")
 	if _, err := client.Run(fmt.Sprintf("sudo systemctl start %s && sudo systemctl is-active --quiet %s", util.ShellQuote(service), util.ShellQuote(service))); err != nil {
-		return fmt.Errorf("start %s on the new instance: %w", service, err)
+		return fmt.Errorf("start %s on the new instance: %w\n%s", service, err, rollback)
 	}
 	started = true
 	if err := deploy.HealthCheck(client, resolved); err != nil {
-		return fmt.Errorf("the app runs on the new instance but its health check failed (roll back: set %s to the old URL, then deploy): %w", secretName, err)
+		return fmt.Errorf("the app runs on the new instance but its health check failed: %w\n%s", err, rollback)
 	}
 
 	fmt.Fprintf(os.Stdout, "\nMigrated %s to its own Redis instance %s (port %d). Saved secret %q.\n", cfg.EnvName, instance, port, secretName)
+	fmt.Fprintln(os.Stdout, rollback)
 	fmt.Fprintf(os.Stdout, "The shared Redis still holds the old copy and user. Once you are happy, remove them:\n")
 	fmt.Fprintf(os.Stdout, "  landfall redis status --env %s   (shows the cleanup command)\n", cfg.EnvName)
+	if oldURL != "" {
+		fmt.Fprintf(os.Stdout, "  landfall secrets delete %s\n", PreviousSecretName(secretName))
+	}
 	return nil
+}
+
+// PreviousSecretName is where migrate keeps an environment's old REDIS_URL,
+// so a rollback to the shared Redis doesn't need its password reset.
+func PreviousSecretName(secretName string) string {
+	return secretName + "_previous"
+}
+
+// switchSecret saves the old URL (if any) as the previous secret, then the
+// new one. The new URL is only saved once the old one is kept, so a failure
+// never leaves the old URL lost.
+func switchSecret(name, oldURL, newURL string, save func(name, value string) error) error {
+	if oldURL != "" {
+		if err := save(PreviousSecretName(name), oldURL); err != nil {
+			return fmt.Errorf("keep the old URL as secret %q: %w", PreviousSecretName(name), err)
+		}
+	}
+	if err := save(name, newURL); err != nil {
+		return fmt.Errorf("save secret %q: %w", name, err)
+	}
+	return nil
+}
+
+// rollbackHint tells how to point the app back at the shared Redis.
+func rollbackHint(envName, secretName string, kept bool) string {
+	if !kept {
+		return fmt.Sprintf("To roll back: set %s to the old URL, then run: landfall deploy --env %s", secretName, envName)
+	}
+	return fmt.Sprintf("The old URL is kept in secret %q. To roll back:\n  landfall secrets set %s --value \"$(landfall secrets get %s --reveal)\" && landfall deploy --env %s",
+		PreviousSecretName(secretName), secretName, PreviousSecretName(secretName), envName)
 }
 
 // referencesSecret reports whether the environment's env uses the secret, so

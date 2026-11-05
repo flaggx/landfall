@@ -1,11 +1,71 @@
 package redis
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/flaggx/landfall/internal/config"
 )
+
+func TestSwitchSecretKeepsOldURLFirst(t *testing.T) {
+	var saved []string
+	store := map[string]string{}
+	save := func(name, value string) error {
+		saved = append(saved, name)
+		store[name] = value
+		return nil
+	}
+	if err := switchSecret("prod_redis_url", "redis://old@127.0.0.1:6379/0", "redis://new@127.0.0.1:6381/0", save); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(saved, ",") != "prod_redis_url_previous,prod_redis_url" {
+		t.Fatalf("save order: %v", saved)
+	}
+	if store["prod_redis_url_previous"] != "redis://old@127.0.0.1:6379/0" || store["prod_redis_url"] != "redis://new@127.0.0.1:6381/0" {
+		t.Fatalf("stored: %v", store)
+	}
+}
+
+func TestSwitchSecretFailsBeforeSwitchingWhenOldURLCannotBeKept(t *testing.T) {
+	var saved []string
+	save := func(name, value string) error {
+		saved = append(saved, name)
+		if strings.HasSuffix(name, "_previous") {
+			return errors.New("disk full")
+		}
+		return nil
+	}
+	err := switchSecret("prod_redis_url", "redis://old@127.0.0.1:6379/0", "redis://new@127.0.0.1:6381/0", save)
+	if err == nil || !strings.Contains(err.Error(), "prod_redis_url_previous") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("the new URL was saved although the old one wasn't kept: %v", saved)
+	}
+}
+
+func TestSwitchSecretWithoutOldURL(t *testing.T) {
+	var saved []string
+	save := func(name, value string) error { saved = append(saved, name); return nil }
+	if err := switchSecret("dev_redis_url", "", "redis://new@127.0.0.1:6380/0", save); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(saved, ",") != "dev_redis_url" {
+		t.Fatalf("save order: %v", saved)
+	}
+}
+
+func TestRollbackHint(t *testing.T) {
+	got := rollbackHint("prod", "prod_redis_url", true)
+	want := `landfall secrets set prod_redis_url --value "$(landfall secrets get prod_redis_url_previous --reveal)" && landfall deploy --env prod`
+	if !strings.Contains(got, want) {
+		t.Fatalf("hint:\n%s\nwant it to contain:\n%s", got, want)
+	}
+	if got := rollbackHint("dev", "dev_redis_url", false); !strings.Contains(got, "set dev_redis_url to the old URL") {
+		t.Fatalf("hint without a kept URL: %s", got)
+	}
+}
 
 func TestMigrationSourceDB(t *testing.T) {
 	const host = "203.0.113.10"
