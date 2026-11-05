@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `redis migrate` keeps the environment's old `REDIS_URL` in the secret
+  `<env>_redis_url_previous` before switching, and prints a one-line
+  rollback. Before, the old URL was overwritten, so rolling back to the
+  shared Redis meant resetting the old user's password first. If the old URL
+  can't be saved, migrate stops before switching. It also stops when the
+  secrets file can't be read, instead of carrying on without it.
+
 ## [0.5.1] - 2026-11-05
 
 ### Fixed

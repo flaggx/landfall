@@ -218,6 +218,11 @@ NEW_URL=$(lf secrets get "$SECRET" --reveal)
 NEW_PORT=$(url_part "$NEW_URL" port)
 [ "$NEW_PORT" != 6379 ] || die "the new URL still points at the shared Redis"
 pass "secret now points at port $NEW_PORT"
+if [ "$(lf secrets get "${SECRET}_previous" --reveal 2>/dev/null)" = "$OLD_URL" ]; then
+  pass "the old URL is kept in secret ${SECRET}_previous"
+else
+  fail "secret ${SECRET}_previous does not hold the old URL"
+fi
 
 [ "$(rcli_url "$NEW_URL" GET "$CANARY")" = "$CANARY_VALUE" ] && pass "canary key was copied" || fail "canary key missing in the new instance"
 NEW_KEYS=$(rcli_url "$NEW_URL" DBSIZE)

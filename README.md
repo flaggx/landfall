@@ -445,9 +445,17 @@ rebuilt. The DB index it copies is the one in the environment's current
 `REDIS_URL` secret (or `--from-db`); if another environment on the host uses
 the same index, migrate stops rather than copy that environment's keys too.
 
-To roll back, set the secret to the old URL and deploy. Once you're happy,
-`landfall redis status --env <env>` shows how to remove the old user from the
-shared Redis. When no environment uses it anymore, you can stop it:
+Before switching, migrate keeps the old URL in the secret
+`<env>_redis_url_previous`, so a rollback is one command (migrate prints it):
+
+```bash
+landfall secrets set prod_redis_url --value "$(landfall secrets get prod_redis_url_previous --reveal)" && landfall deploy --env prod
+```
+
+Once you're happy, `landfall redis status --env <env>` shows how to remove
+the old user from the shared Redis; then delete the kept URL with
+`landfall secrets delete <env>_redis_url_previous`. When no environment uses
+the shared Redis anymore, you can stop it:
 `sudo systemctl disable --now redis-server`. To start an environment on an
 empty instance instead, use `landfall redis bootstrap --fresh`.
 
