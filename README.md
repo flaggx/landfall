@@ -52,7 +52,7 @@ You write an app (especially Next.js standalone), point DNS at a VPS, and use a 
 
 PaaS bills and limits pushed you toward a VPS, but you do not want to reinvent deploy scripts every project — and you also do not want a heavyweight control plane or Docker as a prerequisite. Landfall is the middle path: **managed-platform habits on infrastructure you own**, optimized for a few serious apps rather than a fleet of experiments.
 
-### Supported vs experimental (v0.1)
+### Supported vs experimental
 
 **Supported core path**
 
@@ -91,15 +91,15 @@ Also supported: local `db backup`, `db backups`, `db restore`, `db schedule`.
 
 ## Install
 
-Requires Go 1.22+ (see `go.mod`) and SSH access to an Ubuntu 22.04/24.04 VPS.
+You need SSH access to an Ubuntu 22.04/24.04 VPS.
 
-**Recommended** (after a tagged release):
+**Recommended:** download a Linux binary (amd64 or arm64) from the [latest release](https://github.com/flaggx/landfall/releases/latest), check it against `checksums.txt`, and put `landfall` on your `PATH`.
+
+With Go installed (version per `go.mod`, currently 1.25+):
 
 ```bash
-go install github.com/flaggx/landfall/cmd/landfall@v0.2.0
+go install github.com/flaggx/landfall/cmd/landfall@latest
 ```
-
-Or download a Linux binary from the [GitHub Releases](https://github.com/flaggx/landfall/releases) page.
 
 From source:
 
